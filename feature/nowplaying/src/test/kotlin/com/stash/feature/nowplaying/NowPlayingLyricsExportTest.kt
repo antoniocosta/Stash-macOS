@@ -63,7 +63,7 @@ class NowPlayingLyricsExportTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         coEvery { lyricsRepository.get(42L) } returns cachedLyrics()
-        coEvery { lyricsSidecarWriter.write(42L, any()) } coAnswers {
+        coEvery { lyricsSidecarWriter.writeLrcSidecar(42L, any()) } coAnswers {
             entered.complete(Unit)
             release.await()
         }
@@ -74,7 +74,7 @@ class NowPlayingLyricsExportTest {
             viewModel.exportLyricsForCurrentTrack()
             entered.await()
             assertEquals(42L, viewModel.exportingLyricsTrackId.value)
-            coVerify(exactly = 1) { lyricsSidecarWriter.write(42L, any()) }
+            coVerify(exactly = 1) { lyricsSidecarWriter.writeLrcSidecar(42L, any()) }
 
             release.complete(Unit)
             assertEquals("Lyrics saved with the song file.", awaitItem())
@@ -87,7 +87,7 @@ class NowPlayingLyricsExportTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         coEvery { lyricsRepository.get(42L) } returns cachedLyrics()
-        coEvery { lyricsSidecarWriter.write(42L, any()) } coAnswers {
+        coEvery { lyricsSidecarWriter.writeLrcSidecar(42L, any()) } coAnswers {
             entered.complete(Unit)
             release.await()
         }
@@ -104,7 +104,7 @@ class NowPlayingLyricsExportTest {
             coVerify(exactly = 0) { lyricsRepository.get(84L) }
 
             release.complete(Unit)
-            assertEquals("Lyrics saved with the song file for ‘Song A’.", awaitItem())
+            assertEquals("Lyrics saved with the song file for 'Song A'.", awaitItem())
             assertEquals(null, viewModel.exportingLyricsTrackId.first { it == null })
             cancelAndIgnoreRemainingEvents()
         }
@@ -116,15 +116,15 @@ class NowPlayingLyricsExportTest {
 
         viewModel.userMessages.test {
             viewModel.exportLyricsForCurrentTrack()
-            assertEquals("No lyrics to save yet.", awaitItem())
-            coVerify(exactly = 0) { lyricsSidecarWriter.write(any(), any()) }
+            assertEquals("Couldn't fetch lyrics yet — try again from the lyrics sheet.", awaitItem())
+            coVerify(exactly = 0) { lyricsSidecarWriter.writeLrcSidecar(any(), any()) }
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test fun `write failure reports truthfully`() = runTest(dispatcher) {
         coEvery { lyricsRepository.get(42L) } returns cachedLyrics()
-        coEvery { lyricsSidecarWriter.write(42L, any()) } throws IOException("disk full")
+        coEvery { lyricsSidecarWriter.writeLrcSidecar(42L, any()) } throws IOException("disk full")
         val viewModel = viewModelWithDownloadedTrack()
 
         viewModel.userMessages.test {

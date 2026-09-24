@@ -98,7 +98,7 @@ import com.stash.core.data.db.entity.TrackTagEntity
         ArtistImageEntity::class,
         SharedMixEntity::class,
     ],
-    version = 48,
+    version = 50,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -1314,6 +1314,30 @@ abstract class StashDatabase : RoomDatabase() {
         }
 
         /**
+         * v48 -> v49: word-synced lyrics. `lyrics.ttml` is the raw Apple-style TTML (source of
+         * truth for the syllable renderer; `synced_lrc` is derived from it so every LRC consumer
+         * keeps working). `ttml_checked_at` is the upgrade backfill's "asked, Apple has nothing"
+         * stamp: NULL = never tried, so the worker terminates instead of re-polling misses.
+         * Purely additive.
+         */
+        val MIGRATION_48_49 = object : Migration(48, 49) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE lyrics ADD COLUMN ttml TEXT")
+                db.execSQL("ALTER TABLE lyrics ADD COLUMN ttml_checked_at INTEGER")
+            }
+        }
+
+        /**
+         * v49 -> v50: per-track lyrics sync offset (`lyrics.sync_offset_ms`, signed milliseconds,
+         * default 0). Positive delays lyrics, negative shows them earlier. Purely additive.
+         */
+        val MIGRATION_49_50 = object : Migration(49, 50) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE lyrics ADD COLUMN sync_offset_ms INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /**
          * The complete migration chain, shared by every builder of a
          * [StashDatabase]: the DI singleton in
          * [com.stash.core.data.di.DatabaseModule] AND the throwaway instance
@@ -1374,6 +1398,8 @@ abstract class StashDatabase : RoomDatabase() {
                 MIGRATION_45_46,
                 MIGRATION_46_47,
                 MIGRATION_47_48,
+                MIGRATION_48_49,
+                MIGRATION_49_50,
             )
         }
     }

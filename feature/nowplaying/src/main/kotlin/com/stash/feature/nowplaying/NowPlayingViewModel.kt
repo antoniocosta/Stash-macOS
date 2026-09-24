@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
@@ -466,6 +467,7 @@ class NowPlayingViewModel @Inject constructor(
                 else -> _streamingLyricsState.map { it ?: LyricsViewState.Loading }
             }
         }
+        .flowOn(Dispatchers.Default)
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000L),
@@ -495,7 +497,28 @@ class NowPlayingViewModel @Inject constructor(
      * synced renderer only cares about the position, so this is the
      * narrower subscription that matches what it needs.
      */
-    val currentPositionMs: StateFlow<Long> = playerRepository.currentPosition
+    /**
+     * Raw per-track sync offset (signed ms; positive delays lyrics), for the sheet's Offset dialog
+     * to show the current value. Null when there's nothing to store an offset on — a streaming
+     * track (id == 0L) or a track with no lyrics row yet — so the sheet hides its Offset button.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val lyricsSyncOffsetMs: StateFlow<Long?> = uiState
+        .map { it.currentTrack }
+        .distinctUntilChanged { old, new -> trackKey(old) == trackKey(new) }
+        .flatMapLatest { track ->
+            if (track != null && track.id > 0L) lyricsRepository.observeSyncOffsetMs(track.id) else flowOf(null)
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), null)
+
+    /**
+     * Position fed to the lyrics sheet + live bar, with [lyricsSyncOffsetMs] baked in. Everything
+     * else (the progress bar, `onSeekTo`, etc.) keeps using the player's raw position untouched.
+     */
+    val currentPositionMs: StateFlow<Long> = combine(
+        playerRepository.currentPosition,
+        lyricsSyncOffsetMs,
+    ) { pos, offsetMs -> (pos - (offsetMs ?: 0L)).coerceAtLeast(0L) }
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000L),
@@ -969,19 +992,24 @@ class NowPlayingViewModel @Inject constructor(
     fun exportLyricsForCurrentTrack() {
         val track = _uiState.value.currentTrack?.takeIf { it.id > 0L && it.isDownloaded } ?: return
         if (!_exportingLyricsTrackId.compareAndSet(expect = null, update = track.id)) return
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             try {
                 val message = try {
                     val lyrics = lyricsRepository.get(track.id)
-                    if (lyrics == null || lyrics.syncedLrc.isNullOrBlank() && lyrics.plainText.isNullOrBlank()) {
-                        "No lyrics to save yet"
-                    } else {
-                        lyricsSidecarWriter.write(track.id, lyrics)
-                        "Lyrics saved with the song file"
+                    when {
+                        lyrics != null && !(lyrics.syncedLrc.isNullOrBlank() && lyrics.plainText.isNullOrBlank()) -> {
+                            // Explicit save always writes .lrc. The writer hops to Dispatchers.IO itself.
+                            lyricsSidecarWriter.writeLrcSidecar(track.id, lyrics)
+                            "Lyrics saved with the song file"
+                        }
+                        // 0L = every source definitively answered "no lyrics"; distinct from a fetch
+                        // that simply hasn't succeeded yet (stamp stays null on a source failure).
+                        track.lyricsFetchedAt == 0L -> "No lyrics found for this track"
+                        else -> "Couldn't fetch lyrics yet — try again from the lyrics sheet"
                     }
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { "Couldn't save lyrics" }
-                val suffix = if (_uiState.value.currentTrack?.id != track.id) " for ‘${track.title}’" else ""
+                val suffix = if (_uiState.value.currentTrack?.id != track.id) " for '${track.title}'" else ""
                 _userMessages.emit("$message$suffix.")
             } finally {
                 _exportingLyricsTrackId.compareAndSet(expect = track.id, update = null)
@@ -1014,6 +1042,7 @@ class NowPlayingViewModel @Inject constructor(
                 albumArtist = track.albumArtist.ifBlank { null },
                 durationMs = track.durationMs.takeIf { it > 0 },
                 youtubeVideoId = track.youtubeId,
+                interactive = true,
             )
             val result = try {
                 lyricsViewStateForResult(lyricsRepository.resolveTransient(query))
@@ -1028,13 +1057,24 @@ class NowPlayingViewModel @Inject constructor(
         }
     }
 
+    /** Adjust sync for the current track. No-op for streaming tracks (id == 0L) — see [lyricsSyncOffsetMs]. */
+    fun setLyricsSyncOffsetMs(offsetMs: Long) {
+        val track = _uiState.value.currentTrack ?: return
+        if (track.id <= 0L) return
+        viewModelScope.launch { lyricsRepository.setSyncOffsetMs(track.id, offsetMs) }
+    }
+
     /**
      * Tap-to-seek on a synced lyric line. Routed through the same
      * player-controller seek path that the progress bar uses
      * ([onSeekTo]) so the seek is bounded by the current duration.
      */
     fun onLyricsLineSeek(timestampMs: Long) {
-        onSeekTo(timestampMs)
+        // currentPositionMs (what a tapped line's timestamp is measured against) is the raw player
+        // position MINUS the sync offset — undo that here so seeking lands the DISPLAYED position,
+        // not the raw one, on the tapped line. With a non-zero offset, seeking to the raw timestamp
+        // alone lights up the wrong line.
+        onSeekTo(timestampMs + (lyricsSyncOffsetMs.value ?: 0L))
     }
 
     /**
@@ -1073,6 +1113,7 @@ class NowPlayingViewModel @Inject constructor(
                     albumArtist = track.albumArtist.ifBlank { null },
                     durationMs = track.durationMs.takeIf { it > 0 },
                     youtubeVideoId = track.youtubeId,
+                    interactive = true,
                 )
                 try {
                     lyricsRepository.resolveAndStore(query)
