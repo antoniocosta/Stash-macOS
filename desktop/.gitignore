@@ -1,0 +1,12 @@
+build/
+dist/
+.gradle/
+.kotlin/
+*.app/
+*.dmg
+*.db
+*.db-shm
+*.db-wal
+*.preferences_pb
+local.properties
+.DS_Store

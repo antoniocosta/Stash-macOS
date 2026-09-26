@@ -1,0 +1,528 @@
+import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.awt.BasicStroke
+import java.awt.Color
+import java.awt.RenderingHints
+import java.awt.geom.RoundRectangle2D
+import java.awt.image.BufferedImage
+import java.util.Properties
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+import javax.imageio.ImageIO
+
+// macOS desktop port of Stash.
+//
+// Principle: upstream source is compiled AS-IS, straight out of its own module
+// folders. Nothing is copied and nothing upstream is edited. Android-only APIs
+// that upstream calls are satisfied by small JVM implementations under
+// desktop/src/main/kotlin. See desktop/PORTING.md for the ledger of every
+// excluded upstream file and every shim.
+
+plugins {
+    kotlin("jvm") version "2.3.0" // == upstream libs.versions.kotlin
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.compose.compiler)
+    alias(libs.plugins.ksp)
+    id("org.jetbrains.compose") version "1.11.1"
+}
+
+// One coherent Compose Multiplatform release train. navigation-compose 2.9.2
+// wraps androidx navigation 2.9.7 (== upstream) and pulls lifecycle 2.9.6 /
+// savedstate 1.3.6 — all on the SavedState API (no Bundle-era mixing).
+val cmpNavigation = "2.9.2"
+val cmpLifecycle = "2.9.6"
+val dagger = libs.versions.hilt.get() // Dagger and Hilt share version numbers
+
+// ---------------------------------------------------------------------------
+// Upstream modules compiled verbatim, in dependency order.
+// ---------------------------------------------------------------------------
+val upstreamModules = listOf(
+    "core/model",
+    "core/common",
+    "core/network",
+    "core/auth",
+    "data/spotify",
+    "data/ytmusic",
+    "core/data",
+    "data/download",
+    "data/lyrics",
+    "core/ui",
+    "core/media",
+    "feature/home",
+    "feature/library",
+    "feature/nowplaying",
+    "feature/search",
+    "feature/sync",
+    "feature/settings",
+    "app",
+)
+
+// Upstream files that cannot exist on the JVM. Every entry MUST have a reason
+// recorded in PORTING.md. Keep this list as short as humanly possible.
+val androidOnlyUpstreamFiles = listOf<String>(
+    "com/stash/data/ytmusic/potoken/BotGuardPoTokenMinter.kt", // android.webkit.WebView
+)
+
+// Upstream sources reach the compilers through a build-time mirror
+// (build/upstream-src) so that excludes are honoured by BOTH kotlinc and KSP2
+// (KSP2 consumes whole source directories and ignores source-set filters).
+// The mirror is regenerated on every build, never edited, never committed:
+// it is byte-for-byte the upstream files minus androidOnlyUpstreamFiles.
+val probeExcludes = providers.gradleProperty("stash.probeExcludes").orNull?.split(',').orEmpty() // dev aid only
+val syncUpstreamSources by tasks.registering(Sync::class) {
+    upstreamModules.forEach { from(rootDir.resolve("../$it/src/main/kotlin")) }
+    exclude(androidOnlyUpstreamFiles + probeExcludes)
+    into(layout.buildDirectory.dir("upstream-src"))
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+}
+
+// BuildConfig classes AGP would generate for the upstream modules, derived
+// from the SAME sources upstream's Gradle files use (app/build.gradle.kts
+// version fields, local.properties keys, env vars) so they track upstream.
+val upstreamLocalProps = Properties().apply {
+    rootDir.resolve("../local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+fun upstreamProp(key: String, env: String) = upstreamLocalProps.getProperty(key) ?: System.getenv(env).orEmpty()
+val appGradle = rootDir.resolve("../app/build.gradle.kts").readText()
+val appApplicationId = Regex("""applicationId\s*=\s*"([^"]+)"""").find(appGradle)!!.groupValues[1]
+val appVersionCode = Regex("""versionCode\s*=\s*(\d+)""").find(appGradle)!!.groupValues[1]
+val appVersionName = Regex("""versionName\s*=\s*"([^"]+)"""").find(appGradle)!!.groupValues[1]
+val appStringsXml = rootDir.resolve("../app/src/main/res/values/strings.xml").readText()
+val appName = Regex("""<string\s+name="app_name">([^<]+)</string>""").find(appStringsXml)?.groupValues?.get(1) ?: "Stash"
+val supportersUrl = Regex(""""SUPPORTERS_JSON_URL",\s*"\\"([^\\]+)\\""""").find(appGradle)!!.groupValues[1]
+val desktopDebug = providers.gradleProperty("stash.debug").orNull == "true"
+
+val generateBuildConfigs by tasks.registering {
+    val out = layout.buildDirectory.dir("generated/buildconfig")
+    inputs.property("v", listOf(appVersionCode, appVersionName, supportersUrl, desktopDebug, upstreamLocalProps.toString()))
+    outputs.dir(out)
+    doLast {
+        fun q(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+        fun write(pkg: String, fields: Map<String, String>) {
+            val f = out.get().file(pkg.replace('.', '/') + "/BuildConfig.java").asFile
+            f.parentFile.mkdirs()
+            f.writeText(buildString {
+                appendLine("// Generated by desktop/build.gradle.kts (AGP BuildConfig equivalent). Do not edit.")
+                appendLine("package $pkg;")
+                appendLine("public final class BuildConfig {")
+                appendLine("  public static final boolean DEBUG = $desktopDebug;")
+                fields.forEach { (k, v) -> appendLine("  public static final $v;".replaceFirst("NAME", k)) }
+                appendLine("}")
+            })
+        }
+        write("com.stash.core.network", emptyMap())
+        write("com.stash.data.download", mapOf(
+            "LOSSLESS_CONFIG_URL" to "String NAME = " + q(upstreamProp("lossless.configUrl", "LOSSLESS_CONFIG_URL")),
+            "LOSSLESS_CONFIG_PUBKEY" to "String NAME = " + q(upstreamProp("lossless.configPubKey", "LOSSLESS_CONFIG_PUBKEY")),
+        ))
+        write("com.stash.app", mapOf(
+            "APPLICATION_ID" to "String NAME = \"com.stash.app\"",
+            "VERSION_CODE" to "int NAME = $appVersionCode",
+            "VERSION_NAME" to "String NAME = " + q(appVersionName),
+            "LASTFM_API_KEY" to "String NAME = " + q(upstreamProp("lastfm.apiKey", "LASTFM_API_KEY")),
+            "LASTFM_API_SECRET" to "String NAME = " + q(upstreamProp("lastfm.apiSecret", "LASTFM_API_SECRET")),
+            "LASTFM_EXTRA_API_KEYS" to "String NAME = " + q(upstreamProp("lastfm.extraApiKeys", "LASTFM_EXTRA_API_KEYS")),
+            "LASTFM_PROXY_URL" to "String NAME = " + q(upstreamProp("lastfm.proxyUrl", "LASTFM_PROXY_URL")),
+            "SUPPORTERS_JSON_URL" to "String NAME = " + q(supportersUrl),
+            "STREAMING_ENGINE_ENABLED" to "boolean NAME = true",
+        ))
+    }
+}
+sourceSets.named("main") { java.srcDir(generateBuildConfigs) }
+
+// Android resources: the R classes AGP would generate (non-transitive, one per
+// module namespace) plus the resource files themselves, copied onto the
+// classpath under stash-res/ with an id -> entry registry (stash-res/index.properties)
+// that the runtime shims (Font(resId), painterResource(id), Context.getString) read.
+// Density-qualified drawables resolve to the unqualified file, else the highest density.
+val generateAndroidResources by tasks.registering {
+    val javaOut = layout.buildDirectory.dir("generated/res-r")
+    val resOut = layout.buildDirectory.dir("generated/res-files")
+    val resDirs = upstreamModules.map { rootDir.resolve("../$it/src/main/res") }
+    resDirs.forEach { if (it.exists()) inputs.dir(it) }
+    inputs.property("modules", upstreamModules)
+    outputs.dirs(javaOut, resOut)
+    doLast {
+        val javaRoot = javaOut.get().asFile.apply { deleteRecursively(); mkdirs() }
+        val resRoot = resOut.get().asFile.apply { deleteRecursively(); mkdirs() }
+        val index = Properties()
+        var nextId = 0x7f010000
+        val densityRank = listOf("xxxhdpi", "xxhdpi", "xhdpi", "hdpi", "mdpi", "ldpi")
+        fun rank(qualifiers: String): Int = when {
+            qualifiers.isEmpty() -> 0
+            qualifiers.startsWith("anydpi") -> 100
+            else -> densityRank.indexOf(qualifiers.substringBefore('-')).let { if (it < 0) 200 else it + 1 }
+        }
+        fun unescape(s: String) = s.trim().removeSurrounding("\"")
+            .replace("\\'", "'").replace("\\\"", "\"").replace("\\n", "\n").replace("\\t", "\t")
+            .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+        upstreamModules.forEach { module ->
+            val res = rootDir.resolve("../$module/src/main/res")
+            if (!res.isDirectory) return@forEach
+            val namespace = Regex("""namespace\s*=\s*"([^"]+)"""")
+                .find(rootDir.resolve("../$module/build.gradle.kts").readText())!!.groupValues[1]
+            val entries = sortedMapOf<String, java.util.SortedMap<String, Int>>() // type -> name -> id
+            fun id(type: String, name: String, value: String): Int {
+                val byName = entries.getOrPut(type) { sortedMapOf() }
+                byName[name]?.let { return it }
+                val newId = nextId++
+                byName[name] = newId
+                index.setProperty(Integer.toHexString(newId), value)
+                return newId
+            }
+            // File-based resources (font, drawable, mipmap, raw).
+            res.listFiles().orEmpty().filter { it.isDirectory }
+                .map { it to it.name.substringBefore('-') }
+                .filter { (_, type) -> type in setOf("font", "drawable", "mipmap", "raw") }
+                .flatMap { (dir, type) ->
+                    val qualifiers = dir.name.substringAfter('-', "")
+                    dir.listFiles().orEmpty().map { Triple(type, it, rank(qualifiers)) }
+                }
+                .groupBy { (type, file, _) -> type to file.nameWithoutExtension }
+                .toSortedMap(compareBy({ it.first }, { it.second }))
+                .forEach { (key, candidates) ->
+                    val (type, file, _) = candidates.minBy { it.third }
+                    val path = "stash-res/$namespace/$type/${file.name}"
+                    file.copyTo(resRoot.resolve(path), overwrite = true)
+                    id(type, key.second, "file:$path")
+                }
+            // values/strings.xml (unqualified locale only).
+            res.resolve("values").listFiles().orEmpty().filter { it.extension == "xml" }.forEach { xml ->
+                Regex("""<string\s+name="([^"]+)"[^>]*>(.*?)</string>""", RegexOption.DOT_MATCHES_ALL)
+                    .findAll(xml.readText()).forEach { m ->
+                        id("string", m.groupValues[1], "string:" + unescape(m.groupValues[2]))
+                    }
+            }
+            val f = javaRoot.resolve(namespace.replace('.', '/') + "/R.java")
+            f.parentFile.mkdirs()
+            f.writeText(buildString {
+                appendLine("// Generated by desktop/build.gradle.kts (AGP R class equivalent). Do not edit.")
+                appendLine("package $namespace;")
+                appendLine("public final class R {")
+                entries.forEach { (type, byName) ->
+                    appendLine("  public static final class $type {")
+                    byName.forEach { (name, v) -> appendLine("    public static final int $name = 0x${Integer.toHexString(v)};") }
+                    appendLine("  }")
+                }
+                appendLine("}")
+            })
+        }
+        resRoot.resolve("stash-res/index.properties").outputStream().use { index.store(it, "id(hex) -> file:<classpath>|string:<text>") }
+    }
+}
+sourceSets.named("main") {
+    java.srcDir(generateAndroidResources.map { layout.buildDirectory.dir("generated/res-r").get() })
+    resources.srcDir(generateAndroidResources.map { layout.buildDirectory.dir("generated/res-files").get() })
+}
+
+kotlin {
+    jvmToolchain(17)
+    compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
+    sourceSets.named("main") {
+        kotlin.srcDir(syncUpstreamSources)
+        // Dev aid only: leave work-in-progress shim trees out of a probe compile.
+        providers.gradleProperty("stash.probeExcludeShims").orNull?.split(',')?.let { kotlin.exclude(it) }
+    }
+}
+
+ksp {
+    arg("room.generateKotlin", "true")
+}
+
+dependencies {
+    // Compose Multiplatform (desktop) — same androidx.compose.* packages upstream uses.
+    implementation(compose.desktop.currentOs)
+    implementation(compose.material3)
+    implementation(compose.materialIconsExtended)
+    implementation(compose.animation)
+    implementation("org.jetbrains.androidx.navigation:navigation-compose:$cmpNavigation")
+    implementation("org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose:$cmpLifecycle")
+    implementation("org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose:$cmpLifecycle")
+    implementation("org.jetbrains.compose.ui:ui-backhandler:1.11.1")
+
+    // Same libraries/versions as upstream (all multiplatform / JVM-capable).
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+    implementation(libs.room.runtime)
+    implementation("androidx.sqlite:sqlite-bundled:2.5.0")
+    ksp(libs.room.compiler)
+    implementation(libs.datastore.preferences)
+    implementation(libs.okhttp)
+    implementation(libs.okhttp.logging)
+    implementation(libs.kotlinx.serialization.json)
+    implementation("org.json:json:20250517") // org.json ships inside the Android framework; reference implementation on the JVM
+    implementation("com.google.crypto.tink:tink:${libs.versions.tink.get()}") // JVM flavour of tink-android
+    implementation("com.google.guava:guava:33.4.8-jre") // ListenableFuture/ImmutableList used by WorkManager + media3 APIs
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:${libs.versions.coroutines.get()}") // == upstream libs.kotlinx.coroutines.guava
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:${libs.versions.coroutines.get()}")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:${libs.versions.coroutines.get()}")
+
+    // Real dependency injection: upstream's Hilt @Modules are compiled by plain Dagger.
+    implementation("com.google.dagger:dagger:$dagger")
+    implementation("com.google.dagger:hilt-core:$dagger")
+    ksp("com.google.dagger:dagger-compiler:$dagger")
+
+    testImplementation(kotlin("test"))
+}
+
+// Synthesize a macOS .icns icon bundle from the upstream Android adaptive icon
+// assets (app/src/main/res/drawable/ic_launcher_background.xml + ic_launcher_foreground.png).
+val generateMacIcon by tasks.registering {
+    val bgXml = rootDir.resolve("../app/src/main/res/drawable/ic_launcher_background.xml")
+    val fgPng = rootDir.resolve("../app/src/main/res/drawable/ic_launcher_foreground.png")
+    val outDir = layout.buildDirectory.dir("generated/macos-icon")
+    inputs.files(bgXml, fgPng)
+    outputs.dir(outDir)
+    doLast {
+        val dir = outDir.get().asFile.apply { deleteRecursively(); mkdirs() }
+        val iconsetDir = dir.resolve("Stash.iconset").apply { mkdirs() }
+        val bgHex = Regex("""#([0-9a-fA-F]{6})""").find(bgXml.readText())?.groupValues?.get(1) ?: "111111"
+        val bgColor = Color(bgHex.toInt(16))
+        val fgImage = ImageIO.read(fgPng)
+
+        fun renderIcon(size: Int): BufferedImage {
+            val img = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
+            val g = img.createGraphics()
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
+            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+
+            val pad = size * (100f / 1024f)
+            val box = size - 2f * pad
+            val radius = box * 0.225f
+            val squircle = RoundRectangle2D.Float(pad, pad, box, box, radius * 2f, radius * 2f)
+
+            g.setColor(bgColor)
+            g.fill(squircle)
+
+            val oldClip = g.getClip()
+            g.setClip(squircle)
+            // Android adaptive foreground has the vinyl disc occupying the inner 72/108dp safe zone.
+            // Scale so the vinyl disc fills ~85% of the macOS squircle, matching Android's mipmap icon.
+            val fgDrawSize = (box * 1.275f).toInt()
+            val fgOffset = ((size - fgDrawSize) / 2f).toInt()
+            g.drawImage(fgImage, fgOffset, fgOffset, fgDrawSize, fgDrawSize, null)
+            g.setClip(oldClip)
+
+            g.setColor(Color(255, 255, 255, 22))
+            g.setStroke(BasicStroke((size / 512f).coerceAtLeast(1f)))
+            g.draw(squircle)
+            g.dispose()
+            return img
+        }
+
+        val specs = listOf(
+            "icon_16x16.png" to 16,
+            "icon_16x16@2x.png" to 32,
+            "icon_32x32.png" to 32,
+            "icon_32x32@2x.png" to 64,
+            "icon_128x128.png" to 128,
+            "icon_128x128@2x.png" to 256,
+            "icon_256x256.png" to 256,
+            "icon_256x256@2x.png" to 512,
+            "icon_512x512.png" to 512,
+            "icon_512x512@2x.png" to 1024,
+        )
+        for ((name, px) in specs) {
+            ImageIO.write(renderIcon(px), "png", iconsetDir.resolve(name))
+        }
+        val icnsFile = dir.resolve("Stash.icns")
+        val p = ProcessBuilder("/usr/bin/iconutil", "-c", "icns", iconsetDir.absolutePath, "-o", icnsFile.absolutePath)
+            .redirectErrorStream(true)
+            .start()
+        val out = p.inputStream.bufferedReader().readText()
+        check(p.waitFor() == 0 && icnsFile.exists()) { "iconutil failed: $out" }
+    }
+}
+
+// Apple jpackage requires major version >= 1 during bundle creation; we pass a
+// 1.x version to jpackage and then write the exact upstream Android versionName
+// ("0.9.108") and versionCode ("144") into Contents/Info.plist.
+val jpackageSafeVersion = appVersionName.split('.').let { parts ->
+    val major = parts.firstOrNull()?.toIntOrNull()?.takeIf { it >= 1 } ?: 1
+    val minor = parts.getOrNull(1)?.toIntOrNull() ?: 0
+    val patch = parts.getOrNull(2)?.toIntOrNull() ?: 0
+    "$major.$minor.$patch"
+}
+
+compose.desktop {
+    application {
+        mainClass = "com.stash.desktop.MainKt"
+        nativeDistributions {
+            targetFormats(TargetFormat.Dmg)
+            packageName = appName
+            packageVersion = jpackageSafeVersion
+            description = "Your Spotify + YouTube Music library, in FLAC."
+            copyright = "GPL-3.0"
+            vendor = appName
+            includeAllModules = true
+            macOS {
+                bundleID = appApplicationId
+                dockName = appName
+                iconFile.set(generateMacIcon.map { layout.buildDirectory.file("generated/macos-icon/Stash.icns").get() })
+            }
+        }
+    }
+}
+
+afterEvaluate {
+    tasks.matching { it.name == "createDistributable" || it.name == "createReleaseDistributable" }.configureEach {
+        dependsOn(generateMacIcon)
+        doLast {
+            val appDirs = layout.buildDirectory.dir("compose/binaries").get().asFile
+                .walkTopDown()
+                .filter { it.isDirectory && it.name == "$appName.app" }
+                .toList()
+            for (appDir in appDirs) {
+                appDir.resolve("Contents/app").listFiles().orEmpty()
+                    .filter { jar ->
+                        jar.extension == "jar" && (
+                            jar.name.startsWith("room-runtime-jvm") ||
+                                jar.name.startsWith("coil-core-jvm") ||
+                                jar.name.startsWith("navigation-common-desktop") ||
+                                jar.name.startsWith("navigation-runtime-desktop")
+                            )
+                    }
+                    .forEach { jar ->
+                        val tmp = File(jar.parentFile, "${jar.name}.tmp")
+                        ZipInputStream(jar.inputStream().buffered()).use { zin ->
+                            ZipOutputStream(tmp.outputStream().buffered()).use { zout ->
+                                generateSequence { zin.nextEntry }.forEach { e ->
+                                    val strip = e.name == "androidx/room/migration/Migration.class" ||
+                                        e.name == "coil3/PlatformContext.class" ||
+                                        e.name.startsWith("coil3/PlatformContext$") ||
+                                        e.name == "androidx/navigation/serialization/NavTypeConverter_nonAndroidKt.class" ||
+                                        e.name == "androidx/navigation/NavHostController.class"
+                                    if (!strip) {
+                                        zout.putNextEntry(ZipEntry(e.name))
+                                        zin.copyTo(zout)
+                                        zout.closeEntry()
+                                    }
+                                }
+                            }
+                        }
+                        tmp.copyTo(jar, overwrite = true)
+                        tmp.delete()
+                    }
+
+                val plist = appDir.resolve("Contents/Info.plist")
+                if (plist.exists()) {
+                    fun plistSet(key: String, value: String) {
+                        ProcessBuilder("/usr/libexec/PlistBuddy", "-c", "Set :$key $value", plist.absolutePath)
+                            .redirectErrorStream(true).start().waitFor()
+                    }
+                    plistSet("CFBundleShortVersionString", appVersionName)
+                    plistSet("CFBundleVersion", appVersionCode)
+                    plistSet("CFBundleName", appName)
+                    plistSet("CFBundleDisplayName", appName)
+                    plistSet("CFBundleIdentifier", appApplicationId)
+                    // Re-sign ad-hoc so Apple Silicon LaunchServices / Gatekeeper accepts the updated Info.plist.
+                    ProcessBuilder("/usr/bin/codesign", "--force", "--deep", "--sign", "-", appDir.absolutePath)
+                        .redirectErrorStream(true).start().waitFor()
+                }
+            }
+        }
+    }
+
+    tasks.matching { it.name == "packageDmg" || it.name == "packageReleaseDmg" }.configureEach {
+        dependsOn("createDistributable")
+        actions.clear()
+        doLast {
+            val appDir = layout.buildDirectory.dir("compose/binaries/main/app/$appName.app").get().asFile
+            check(appDir.exists()) { "Expected $appDir to exist before packaging DMG" }
+            val dmgOutDir = layout.buildDirectory.dir("compose/binaries/main/dmg").get().asFile.apply {
+                deleteRecursively()
+                mkdirs()
+            }
+            val stageDir = layout.buildDirectory.dir("tmp/dmg-stage").get().asFile.apply {
+                deleteRecursively()
+                mkdirs()
+            }
+            // Copy Stash.app preserving symlinks and permissions, and add /Applications shortcut
+            ProcessBuilder("/bin/cp", "-R", appDir.absolutePath, stageDir.resolve("$appName.app").absolutePath)
+                .redirectErrorStream(true).start().waitFor()
+            ProcessBuilder("/bin/ln", "-s", "/Applications", stageDir.resolve("Applications").absolutePath)
+                .redirectErrorStream(true).start().waitFor()
+
+            val dmgFile = dmgOutDir.resolve("$appName.dmg")
+            val versionedDmgFile = dmgOutDir.resolve("$appName-v$appVersionName-macos-arm64.dmg")
+            val p = ProcessBuilder(
+                "/usr/bin/hdiutil",
+                "create",
+                "-volname", appName,
+                "-srcfolder", stageDir.absolutePath,
+                "-ov",
+                "-format", "UDZO",
+                dmgFile.absolutePath,
+            ).redirectErrorStream(true).start()
+            val out = p.inputStream.bufferedReader().readText()
+            check(p.waitFor() == 0 && dmgFile.exists()) { "hdiutil failed: $out" }
+            dmgFile.copyTo(versionedDmgFile, overwrite = true)
+            stageDir.deleteRecursively()
+            println("The distribution is written to ${dmgFile.absolutePath} and ${versionedDmgFile.absolutePath}")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The three shadowed library classes:
+// 1. androidx.room.migration.Migration (from room-runtime-jvm)
+// 2. coil3.PlatformContext (from coil-core-jvm, so android.content.Context can
+//    subclass it directly just like coil-core-android's typealias)
+// 3. androidx.navigation.serialization.NavTypeConverter_nonAndroidKt (from
+//    navigation-common-desktop, where parseEnum returns UNKNOWN instead of a
+//    JVM Class.forName Enum NavType)
+// Desktop provides binary-compatible supersets; this transform removes the
+// originals so exactly one definition is on every classpath.
+// ---------------------------------------------------------------------------
+abstract class StripRoomMigration : TransformAction<TransformParameters.None> {
+    @get:InputArtifact
+    abstract val inputArtifact: Provider<FileSystemLocation>
+
+    override fun transform(outputs: TransformOutputs) {
+        val input = inputArtifact.get().asFile
+        if (!input.name.startsWith("room-runtime-jvm") &&
+            !input.name.startsWith("coil-core-jvm") &&
+            !input.name.startsWith("navigation-common-desktop") &&
+            !input.name.startsWith("navigation-runtime-desktop")
+        ) {
+            outputs.file(inputArtifact)
+            return
+        }
+        val output = outputs.file("${input.nameWithoutExtension}-desktop.jar")
+        ZipInputStream(input.inputStream().buffered()).use { zin ->
+            ZipOutputStream(output.outputStream().buffered()).use { zout ->
+                generateSequence { zin.nextEntry }.forEach { e ->
+                    val strip = e.name == "androidx/room/migration/Migration.class" ||
+                        e.name == "coil3/PlatformContext.class" ||
+                        e.name.startsWith("coil3/PlatformContext$") ||
+                        e.name == "androidx/navigation/serialization/NavTypeConverter_nonAndroidKt.class" ||
+                        e.name == "androidx/navigation/NavHostController.class"
+                    if (!strip) {
+                        zout.putNextEntry(ZipEntry(e.name))
+                        zin.copyTo(zout)
+                        zout.closeEntry()
+                    }
+                }
+            }
+        }
+    }
+}
+
+val roomMigrationStripped = Attribute.of("stash.roomMigrationStripped", Boolean::class.javaObjectType)
+val artifactType = Attribute.of("artifactType", String::class.java)
+
+dependencies {
+    attributesSchema { attribute(roomMigrationStripped) }
+    artifactTypes.getByName("jar") { attributes.attribute(roomMigrationStripped, false) }
+    registerTransform(StripRoomMigration::class) {
+        from.attribute(roomMigrationStripped, false).attribute(artifactType, "jar")
+        to.attribute(roomMigrationStripped, true).attribute(artifactType, "jar")
+    }
+}
+
+configurations.matching { it.name.endsWith("CompileClasspath") || it.name.endsWith("RuntimeClasspath") }.configureEach {
+    attributes.attribute(roomMigrationStripped, true)
+}
+
