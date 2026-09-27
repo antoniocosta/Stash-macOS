@@ -63,6 +63,11 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
   sh ./gradlew -p desktop packageDmg
 ```
 
+When installing from a downloaded `.dmg`, clear the macOS quarantine attribute before first launch:
+```bash
+xattr -dr com.apple.quarantine /Applications/Stash.app
+```
+
 ### 4. Run the Verification Suite
 
 ```bash

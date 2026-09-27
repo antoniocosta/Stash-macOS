@@ -107,7 +107,7 @@ Everything a source build of Stash for macOS can reach, and what for:
 3. Open `Stash.dmg` and drag **`Stash.app`** into your **`Applications`** folder.
 4. *(First launch only)* Because `Stash.app` is ad-hoc signed rather than Apple Developer notarized, clear the macOS quarantine attribute before opening it the first time:
    ```bash
-   xattr -cr /Applications/Stash.app
+   xattr -dr com.apple.quarantine /Applications/Stash.app
    ```
 
 ### Option 2 — Build from source
