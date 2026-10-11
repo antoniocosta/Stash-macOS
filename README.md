@@ -10,6 +10,10 @@ Stash mirrors your Spotify and YouTube Music libraries to your Mac. You connect 
 
 There's no Stash account. No subscription. No ads. No analytics. Your credentials live on your Mac — the Spotify, YouTube, and Discord tokens encrypted with AES-256-GCM and backed by the macOS Keychain, the rest in your user Library folder — and each one is only ever sent back to the service it came from. Spotify and YouTube aren't the only hosts Stash talks to, though — lyrics, scrobbling, artist metadata, Discord presence, shared mixes, and lossless all have their own. [The full list is below](#what-stash-talks-to).
 
+If you like this or find it useful, support the project by buying me a coffee.
+
+<a href="https://www.buymeacoffee.com/antoniocosta" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 40px !important;width: 140px !important;" ></a>
+
 ### About this port
 
 This repository is a native **macOS (Apple Silicon)** desktop port of **[Stash](https://github.com/rawnaldclark/Stash)**, created and maintained by **[Rawnald Clark (`@rawnaldclark`)](https://github.com/rawnaldclark)** and **[`@ParaliyzedEvo`](https://github.com/ParaliyzedEvo)**.
