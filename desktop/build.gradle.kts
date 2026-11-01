@@ -538,8 +538,14 @@ afterEvaluate {
                 deleteRecursively()
                 mkdirs()
             }
+            // The stage holds an /Applications symlink, and File.deleteRecursively() follows symlinks into their
+            // targets, so it would empty the real /Applications. rm -rf removes the link itself, never its target.
+            fun removeStage(dir: File) {
+                ProcessBuilder("/bin/rm", "-rf", dir.absolutePath).redirectErrorStream(true).start().waitFor()
+                check(!dir.exists()) { "Could not remove $dir" }
+            }
             val stageDir = layout.buildDirectory.dir("tmp/dmg-stage").get().asFile.apply {
-                deleteRecursively()
+                removeStage(this)
                 mkdirs()
             }
             // Copy Stash.app preserving symlinks and permissions, and add /Applications shortcut
@@ -562,7 +568,7 @@ afterEvaluate {
             val out = p.inputStream.bufferedReader().readText()
             check(p.waitFor() == 0 && dmgFile.exists()) { "hdiutil failed: $out" }
             dmgFile.copyTo(versionedDmgFile, overwrite = true)
-            stageDir.deleteRecursively()
+            removeStage(stageDir)
             println("The distribution is written to ${dmgFile.absolutePath} and ${versionedDmgFile.absolutePath}")
         }
     }
