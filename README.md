@@ -22,80 +22,108 @@ It is built as a **pure, zero-touch port**: all 23 upstream Android modules (`co
 
 ---
 
-## Online vs Offline
+## Download or stream
 
-Stash has two modes. They decide what a sync actually does.
+Stash has two ways to hold your library, and you can mix them.
 
-**Offline mode** Sync downloads each track and stores it on your Mac. Once a track is on disk you can play it forever with no connection. It costs storage but no recurring data. Whether a download lands as FLAC depends entirely on the lossless source you've connected — see [Lossless](#lossless). Without one you get the AAC/Opus fallback, or nothing at all if you've turned that fallback off.
+**Download** — turn it on in the Sync tab and a sync saves each song to your Mac, so it plays with no connection. Download mode plays your downloads and hides anything that isn't downloaded. It costs storage but no recurring data. Any single playlist also has its own Download button.
 
-**Online mode** is for people who don't want the storage hit. Builds a streamable local index of your library — almost no storage, but you need a connection to play.
+**Stream** — leave Download off and your library is a streamable index: almost no storage, but you need a connection to play.
+
+Either way you pick the quality: **Lossless**, **AAC 320** or **Opus**. Whether a song lands as FLAC depends on the lossless source you've connected — see [Lossless](#lossless).
 
 ---
 
 ## Lossless
 
-**Stash ships no shared user accounts.** There's no bundled Qobuz account and no shared token pool — nothing in the app that plays music on someone else's subscription. FLAC comes from a source *you* own, and you pick which:
+**This macOS build ships no shared accounts and no relay.** Upstream's official Android release can get FLAC links through the project's own relay; a build from source, which is what this port is, has no relay config, so FLAC comes from a source *you* own:
 
-- **Your own Qobuz account** — connect it in Settings › Audio & Quality. Connecting asks for your Qobuz email and password, which are sent once to Qobuz to mint a token; Stash stores the token, not the password. It then streams and downloads from your own subscription, the same catalog your Qobuz app sees.
-- **Your own relay endpoint** — if you run a Qobuz relay, paste its URL into the custom-endpoint field and Stash routes through it.
+- **Your own Qobuz account** — connect it in Settings › Audio & Quality. Connecting sends your Qobuz email and password to Qobuz once to get a token; Stash keeps the token, not the password. It then streams and downloads from your own subscription.
+- **Your own relay endpoint** — if you run one, paste its URL into the custom-endpoint field and Stash routes through it.
 
-Connect neither of them and Stash still works — playback and downloads fall back to AAC or Opus, and Home tells you so instead of pretending.
+Connect neither and Stash still works: songs play and download as AAC 320 or Opus instead, and Now Playing tells you where each one came from.
 
 ---
 
 ## Features
 
-### Library
+### Your library, one place
 
-- **Spotify + YouTube Music in one unified library** — liked songs, playlists, daily mixes, every Spotify mix worth syncing
-- **Bulletproof matching** — finds the right version of a track 99% of the time
-- **Shared mixes** — share a mix link or follow a friend's mix with live updates
-- **Last.fm scrobbling**, optional, off by default
-- **Last.fm recommendations** — connect Last.fm and it appears under Sync → Sources, keeping a rotating "Recommended by Last.fm" playlist of tracks it suggests from your listening
-- **Wrong-match flag** — if Stash picked the wrong version, click once from Now Playing and it queues a re-search
-- **Likes and History mirroring** — when enabled, each track you like & stream in Stash lands in your Spotify & YouTube accounts
+- **Spotify + YouTube Music together** — liked songs, playlists, daily mixes
+- **Your listening, wrapped** — top songs, stats, and a recap of your month; **Your record** brings every year you've listened together, from Spotify, Last.fm or Stash
+- **Refresh or Accumulate** — when a song leaves a playlist on the service, remove it here too, or keep it
+- **Wrong-match flag** — if Stash picked the wrong version, flag it from Now Playing and it searches again
+- **Likes and history mirroring** — optional: what you like and play in Stash lands in your Spotify and YouTube Music accounts
 
-### Playback
+### Sound
 
-- **5-band parametric equalizer** with presets, preamp, bass shelf boost, and soft-clip limiter running in real time on 32-bit float PCM audio
-- **Crossfader**
-- **Loudness normalizer**
-- **Word-synced & line-synced lyrics** — pulled from Apple Music (via Paxsenix), LRCLIB, and KuGou, scrolled in real time with the track
+- **Real FLAC files, up to Hi-Res** (with a lossless source, see above). Downloads keep their full resolution; playback on the Mac currently outputs 44.1 kHz stereo
+- **5-band EQ** with presets, preamp, bass boost and a soft limiter, running in real time on 32-bit float audio
+- **Crossfade** and a **loudness normalizer**
+- **Synced lyrics** that light up word by word, pulled automatically from Apple Music (via paxsenix), LRCLIB, KuGou and YouTube Music
 
-### Discord
+### Finding new stuff
 
-- **Rich Presence** — show what you're listening to as your Discord status, art and all. Optional, off by default, and disconnecting clears it immediately.
+- **Daily Discover, Stash Mixes and radios**
+- **Last.fm recommendations** — a rotating "Recommended by Last.fm" playlist under Sync › Sources
+- **Shared mixes and song links** — share a song or a mix as a link for friends to open in Stash (opening one on the Mac isn't wired up yet, see below)
+- **Community** — public playlists and songs other people post, with votes. Off until you turn it on in Home layout
+
+### Social
+
+- **Listen Together** — in sync with friends
+- **Last.fm and ListenBrainz scrobbling** — optional, off by default
+- **Discord Rich Presence** — what you're playing, art and all, as your Discord status. Optional, and disconnecting clears it immediately
+- **Link Stash on the web** — pick up on another device where you left off, end-to-end encrypted (Settings › Library & Storage)
+
+Dark, light and pure black themes, a Display size setting, and 14 languages (English, Arabic, Chinese, Filipino, French, German, Hindi, Korean, Marathi, Persian, Polish, Portuguese, Russian, Spanish). Everything optional is off until you turn it on.
+
+### Not available on macOS
+
+These upstream features depend on Android, Google Play services or Android app links. They're in the app, but on a Mac they take the path Stash already takes on a phone without that capability:
+
+- **Casting** to Chromecast / Nest speakers — no speakers are found
+- **Your music in Dropbox, OneDrive or Google Drive** — Google Drive needs Google Play services, and the Dropbox / OneDrive sign-in returns to the app through a link the macOS app doesn't handle yet (a plain build hides all three)
+- **Opening Stash links** — a shared-mix or song link opens in your browser rather than in Stash, so following a friend's mix needs the phone app for now; sharing your own works
+- **Scanning a QR code** to link Stash on the web — there's no camera support, so type the code instead
+- **The in-app updater** — update from the [Releases page](https://github.com/antoniocosta/Stash-macOS/releases)
+- **Bit-perfect USB DAC output** — audio goes to macOS's current output device through the system mixer
+- **Your record's web card** — the app shows its "WebView too old" notice; the Mixes tab works
 
 ### Privacy
 
-- No Stash account server, no login, no analytics, no third-party crash reporters.
-- Cookies stored locally on your Mac, encrypted with AES-256-GCM via Google's [Tink](https://developers.google.com/tink) with the master keyset stored in your macOS Login Keychain.
-- Your Spotify, YouTube, and Discord credentials are sent to Spotify, YouTube, and Discord respectively and nowhere else.
+- No Stash account, no analytics, no third-party crash reporters.
+- Your logins are stored on your Mac, encrypted with AES-256-GCM via Google's [Tink](https://developers.google.com/tink), with the master keyset in your macOS login Keychain.
+- Each login is only ever sent back to the service it came from.
 - GPL-3.0, every line of code is open source.
 
 ---
 
 ## What Stash talks to
 
-Everything a source build of Stash for macOS can reach, and what for:
+Everything a source build of Stash for macOS can reach, and what for. It's upstream's [PRIVACY.md](PRIVACY.md#what-stash-talks-to) list minus what this build doesn't have: the project's lossless relay and its config, the Last.fm proxy, cloud storage (Dropbox, OneDrive, Google Drive) and Cast. PRIVACY.md has the full detail on what each host is sent and keeps.
 
-- **Spotify** (`accounts.`, `open.`, `api-partner.`, `api.spotify.com`, `www.spotify.com`, `clienttoken.spotify.com`) — login, library sync, likes and history mirroring
-- **YouTube + YouTube Music** (`music.youtube.com`, `www.youtube.com`, and Google's OAuth endpoints if you use the Google sign-in) — library sync, and the audio itself via InnerTube / `yt-dlp`
+- **Spotify** (`accounts.`, `open.`, `api-partner.`, `api.spotify.com`, `www.spotify.com`, `clienttoken.spotify.com`) — sign-in and library sync; optionally, mirroring your likes and saving songs you play often to Liked Songs
+- **YouTube + YouTube Music** (`music.youtube.com`, `www.youtube.com`, `m.youtube.com` for the sign-in window, and Google's OAuth endpoints if you use the Google sign-in) — library sync, search, artist and album pages, artist photos, and the audio itself via InnerTube / `yt-dlp`; optionally, mirroring likes and play history
 - **`*.googlevideo.com`** — YouTube's audio CDN; the URL comes back in the player response
 - **Google OAuth** (`oauth2.googleapis.com`) — only if you use the YouTube device-code sign-in
-- **yt-dlp** (`api.github.com`, `github.com`, `objects.githubusercontent.com`) — updates its own `yt-dlp_macos` nightly binary every 24 hours
-- **Qobuz — catalog** (`www.qobuz.com`, and `open.qobuz.com` to refresh its public web-player key) — the New Releases, Top Albums and Qobuz Playlists rows on Home. No account needed and **on by default**; turn it off with "Qobuz discovery on Home" in Settings › Library & Storage, or hide those rows in Home layout.
-- **Qobuz — lossless** (`www.qobuz.com`) — FLAC streams and downloads, only once you connect your own account
-- **`stash-share.rawnaldclark.workers.dev`** (`stash.rawnaldclark.com`) — only when you share a mix, open a shared-mix link, or follow a shared mix
+- **The sign-in windows** — the Spotify, YouTube and Discord sign-in pages load what they need from those services' own hosts (and Google reCAPTCHA); Stash itself doesn't call them
+- **GitHub** (`api.github.com`, `github.com`, `release-assets.githubusercontent.com`) — the update check, and `yt-dlp` updating its own `yt-dlp_macos` nightly binary every 24 hours
+- **SoundCloud** (`api-v2.soundcloud.com`, `api-auth.soundcloud.com`, and its `*.sndcdn.com` audio CDN) — a streaming source, and your SoundCloud library if you connect it
+- **Qobuz — catalog** (`www.qobuz.com`, and `open.qobuz.com` to refresh its public web-player key) — the New Releases, Top Albums and Qobuz Playlists rows on Home (**on by default**; turn off "Qobuz discovery on Home" in Settings › Library & Storage), and albums YouTube is missing on artist pages
+- **Qobuz — lossless** (`www.qobuz.com`, and its audio CDN, today `streaming-qobuz-std.akamaized.net`) — while Lossless is on (the default), each song about to play or download is looked up in Qobuz's catalog first, account or not, so Qobuz learns what you play; turn Lossless off in Settings › Audio & Quality to stop that. FLAC itself comes only through your own account or relay endpoint
 - **JioSaavn** (`www.jiosaavn.com`, `aac.saavncdn.com`) — the AAC 320 fallback when nothing lossless matched
-- **Lyrics** (`itunes.apple.com` + `lyrics.paxsenix.org`, `lrclib.net`, `lyrics.kugou.com`) — word-synced (TTML) and line-synced (LRC) lyrics
-- **Last.fm** (`ws.audioscrobbler.com`) — optional scrobbling, plus artist bios and images (when configured via `local.properties`)
+- **Lyrics** (`itunes.apple.com` + `lyrics.paxsenix.org`, `lrclib.net`, `mobileservice.kugou.com` + `lyrics.kugou.com`, and `music.youtube.com` as a last resort) — word-synced and line-synced lyrics
+- **Last.fm** (`ws.audioscrobbler.com`, `www.last.fm` for sign-in) — scrobbling and loved tracks if you connect it; artist bios, tags and the lookups behind Stash Mixes and radios when the build has Last.fm keys in `local.properties`
 - **ListenBrainz** (`api.listenbrainz.org`) — optional scrobbling, only if you connect it
 - **Discord** (`discord.com`, `cdn.discordapp.com`) — optional Rich Presence, only if you connect your account
 - **MusicBrainz** (`musicbrainz.org`) — artist metadata
-- **GitHub** (`api.github.com`) — the update check
-- **`stash-tipjar.rawnaldclark.workers.dev`** — the public supporters list behind the Home supporter pill. Fetch only; it's told nothing about you.
-- **Album art CDNs** — `i.scdn.co`, `lh3.googleusercontent.com`, `yt3.googleusercontent.com`, `yt3.ggpht.com`, `i.ytimg.com`, `static.qobuz.com`, `c.saavncdn.com`
+- **The share Worker** (`stashfm.app`, or `stash-share.rawnaldclark.workers.dev`) — only when you share a mix or a short song link, check mixes you follow, or use Listen Together or Community
+- **The sync Worker** (`sync.stashfm.app`) — only after you link Stash on the web; what it stores is end-to-end encrypted
+- **`stash-tipjar.rawnaldclark.workers.dev`** — the public supporters list behind the Home supporter pill. Fetch only; it's told nothing about you
+- **Album art and artist photos** — straight from Spotify (`i.scdn.co`, `mosaic.scdn.co`, `*.spotifycdn.com`), YouTube (`i.ytimg.com`, `lh3.googleusercontent.com`, `yt3.googleusercontent.com`, `yt3.ggpht.com`), Last.fm (`lastfm.freetls.fastly.net`, `lastfm-img.freetls.fastly.net`), Qobuz (`static.qobuz.com`), JioSaavn (`c.saavncdn.com`) and, for some song links, Deezer (`cdn-images.dzcdn.net`, `e-cdns-images.dzcdn.net`)
+
+Some of this runs without being asked: at every start, a YouTube visitor id and warm-up, the update checks, a `yt-dlp` test run on one public video, missing album art for downloads, and artist photos for your library; while Stash Mixes is on (the default), lookups of what you've played most. PRIVACY.md lists exactly when each runs.
 
 ---
 
@@ -137,7 +165,7 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
 - **macOS 13.0 (Ventura)** or later on **Apple Silicon (M1 / M2 / M3 / M4)**
 - `ffmpeg`, `yt-dlp`, and `quickjs` installed via Homebrew
 - About **9–15 GB** of free disk space for a medium library in Offline mode (scales with how much you sync). Online mode needs almost nothing.
-- A Spotify and/or YouTube Music account
+- A Spotify and/or YouTube Music account to sync your library (searching YouTube Music and streaming what you find works without one)
 
 ### Where Stash stores data on your Mac
 
@@ -199,7 +227,9 @@ Stash doesn't use Spotify's or YouTube's official APIs, because the official API
 
 ### After setup
 
-Open the **Sync** tab. Before you click **Sync Now**, expand the **Spotify Sync Preferences** card and pick the playlists and mixes you want — each playlist has its own toggle. For mixes, choose between **Refresh** mode (each sync replaces the mix's contents) and **Accumulate** mode (each sync stacks new tracks on top of what's there).
+Open the **Sync** tab, pick the playlists and mixes you want, and click **Sync Now**. Choose what happens when a song leaves a playlist on the service — **Refresh** removes it here too, **Accumulate** keeps it — and turn **Download** on if you want songs saved to your Mac.
+
+The first sync is the slow one (a big library with Download on can take an hour). After that it only grabs what's new. Turn on **Auto-sync** and forget about it.
 
 ---
 
@@ -207,7 +237,7 @@ Open the **Sync** tab. Before you click **Sync Now**, expand the **Spotify Sync 
 
 All macOS port code lives inside [`desktop/`](desktop/):
 - **[`desktop/README.md`](desktop/README.md)** — Build, run, packaging, and test commands
-- **[`desktop/PORTING.md`](desktop/PORTING.md)** — Complete technical ledger of the Android → JVM shims, Dagger KSP wiring, `DesktopSpotifyWebPlayerBridge`, HTTP Range streaming, and 5-stage 16-bit PCM DSP audio engine
+- **[`desktop/PORTING.md`](desktop/PORTING.md)** — Complete technical ledger of the Android → JVM shims, Dagger KSP wiring, `DesktopSpotifyWebPlayerBridge`, HTTP Range streaming, the audio engine (ffmpeg decoding into upstream's float DSP), and the upstream features without a macOS equivalent
 
 Because zero files outside `desktop/` are modified, pulling new upstream releases from `rawnaldclark/Stash` is a clean rebase:
 
@@ -216,6 +246,7 @@ git fetch upstream
 git rebase upstream/master
 JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
   sh ./gradlew -p desktop test
+# add -Pstash.networkTests=true to also stream a YouTube Music search result
 ```
 
 ---
@@ -238,9 +269,11 @@ You can also [sponsor `@rawnaldclark` on GitHub](https://github.com/sponsors/raw
 
 ## Legal disclaimer
 
-Stash is an independent, unofficial project. It is **not affiliated with, endorsed by, or sponsored by Spotify AB, YouTube LLC, Google LLC, Alphabet Inc., or Apple Inc.** All trademarks belong to their respective owners.
+Stash is an independent, unofficial project, and this macOS port is an independent port of it. Neither is **affiliated with, endorsed by, or sponsored by Spotify, YouTube, Google, Apple, Qobuz, Tidal, Deezer, SoundCloud, Discord, Last.fm, ListenBrainz, MusicBrainz, JioSaavn, KuGou, LRCLIB, Dropbox, Microsoft, or any other service it connects to.** Third-party names and logos are used only to identify the services they belong to, and all trademarks belong to their respective owners.
 
-Stash is provided **for personal use only** — a tool for managing your own library. You're responsible for complying with the Terms of Service of any music service you use Stash with. Downloading copyrighted content without a license may be illegal in your jurisdiction. The Stash project accepts no responsibility for misuse.
+Stash is a tool for managing your own music library. You're responsible for complying with the Terms of Service of any music service you use Stash with. Downloading copyrighted content without a license may be illegal in your jurisdiction. The Stash project accepts no responsibility for misuse.
+
+Takedown or abuse reports about the app itself go to the upstream project (see its [README](https://github.com/rawnaldclark/Stash#takedown-and-abuse-reports)); reports about this port go to this repository's [Issues](https://github.com/antoniocosta/Stash-macOS/issues).
 
 ---
 
@@ -254,6 +287,8 @@ Stash is provided **for personal use only** — a tool for managing your own lib
 - **[Room](https://developer.android.com/training/data-storage/room) & [Bundled SQLite](https://developer.android.com/kotlin/multiplatform/sqlite)** — local SQLite persistence
 - **[Dagger](https://dagger.dev/)** — compile-time dependency injection
 - **[Spicy Lyrics](https://github.com/Spikerko/spicy-lyrics)** & **[paxsenix's lyrics API](https://lyrics.paxsenix.org/)** — word-synced lyrics reference & lookup
+- **[Bungee Shade](https://fonts.google.com/specimen/Bungee+Shade)** — the wordmark font, by David Jonathan Ross (SIL OFL)
+- **Discord logo** from Simple Icons (CC0)
 
 ---
 

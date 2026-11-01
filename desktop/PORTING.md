@@ -75,7 +75,8 @@ Spotify's mobile `clienttoken.spotify.com` endpoint and TOTP parameters require 
 ### 5.5 Upstream Features Without a macOS Equivalent
 These compile and run, and land on the path upstream already takes on an Android device that lacks the capability:
 - **Google Cast** — no devices are discovered (see §3).
-- **Google Drive (Accounts & Sync)** — `GOOGLE_DRIVE_ENABLED=false`; Play Services `Identity` reports `API_UNAVAILABLE`. Dropbox / OneDrive work when their keys are supplied in `local.properties`.
+- **Cloud storage (Accounts & Sync)** — Google Drive: `GOOGLE_DRIVE_ENABLED=false`, and Play Services `Identity` reports `API_UNAVAILABLE`. Dropbox / OneDrive: hidden without `DROPBOX_APP_KEY` / `ONEDRIVE_CLIENT_ID`, and even with them the OAuth redirect (`db-<key>://1/connect`, `com.stash.app://oauth/onedrive`) can't reach the app yet: `Stash.app` registers no `CFBundleURLTypes` and nothing routes an opened URL to `CloudAuthRedirectActivity`.
+- **App links** — `stashfm.app/m|t|l/…` and `stash://track` links open in the browser, not in Stash (same missing URL routing to `MainActivity.onNewIntent`). Creating share links works.
 - **Your Record's WebView card** — `WebViewFeature.isFeatureSupported` is false, so upstream shows its "WebView too old" notice; the Mixes tab works.
 - **QR scanning (web link pairing)** — CameraX reports no camera provider; pair by typing the code.
 - **In-app APK updater** — there is no APK to install; update the macOS app from the releases page.

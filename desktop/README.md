@@ -17,7 +17,7 @@ brew install openjdk@17 ffmpeg yt-dlp quickjs
 | Dependency | Purpose |
 |---|---|
 | `openjdk@17` | Compiles the project and provides the bundled JVM runtime inside `Stash.app` |
-| `ffmpeg` / `ffprobe` | Real-time 44.1 kHz 16-bit stereo PCM audio decoding, stream inspection, and metadata tagging |
+| `ffmpeg` / `ffprobe` | Real-time 44.1 kHz stereo PCM decoding (float for upstream's DSP), HLS / DASH demuxing, stream inspection, and metadata tagging |
 | `yt-dlp` | Initial YouTube audio stream resolver (auto-updates its own `yt-dlp_macos` binary in `~/Library/Application Support/Stash/yt-dlp/`) |
 | `quickjs` (`qjs`) | Executes YouTube player signature/N-challenge JavaScript during stream extraction |
 
@@ -47,8 +47,8 @@ desktop/build/compose/binaries/main/app/Stash.app
 It uses the exact metadata and assets from the Android counterpart (`app/build.gradle.kts` and `app/src/main/res/`):
 - **Name:** `Stash`
 - **Bundle Identifier (`CFBundleIdentifier`):** `com.stash.app`
-- **Version (`CFBundleShortVersionString`):** `0.9.108`
-- **Build (`CFBundleVersion`):** `144`
+- **Version (`CFBundleShortVersionString`):** `0.9.122`
+- **Build (`CFBundleVersion`):** `158`
 - **Icon (`Stash.icns`):** Generated at build time from Android's adaptive icon assets (`ic_launcher_background.xml` + `ic_launcher_foreground.png`)
 
 You can launch it from Finder, copy it to `/Applications`, or open it from the terminal:
@@ -73,6 +73,13 @@ xattr -dr com.apple.quarantine /Applications/Stash.app
 ```bash
 JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
   sh ./gradlew -p desktop test
+```
+
+The suite boots the real Dagger graph, builds every ViewModel and worker, renders the UI, and plays audio through the real pipeline (a local file, an HLS stream, and a Download-mode refusal). It uses your real `~/Library/Application Support/Stash` data. To also search YouTube Music and stream the first result (needs the network, no account; Online mode is switched on for the test and restored after):
+
+```bash
+JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
+  sh ./gradlew -p desktop test -Pstash.networkTests=true
 ```
 
 ---
@@ -119,8 +126,9 @@ If omitted, the app builds and runs normally with those optional integrations di
 ## Architecture & Porting Details
 
 See **[`PORTING.md`](PORTING.md)** for the complete technical ledger of:
-- How all 18 upstream Android modules are compiled untouched
-- The 4 shadowed multiplatform library classes (`Migration`, `PlatformContext`, `NavTypeConverter`, `NavHostController`)
+- How all 23 upstream Android modules are compiled untouched
+- The 3 excluded Google Cast files and the 5 shadowed library classes (`Migration`, `PlatformContext`, `NavTypeConverter`, `NavHostController`, `InvalidationTracker`)
 - The `DesktopSpotifyWebPlayerBridge` authentication interceptor
-- The chunked HTTP Range streaming & `ffmpeg` + 5-stage 16-bit PCM DSP audio engine
+- The chunked HTTP Range streaming, the HLS / DASH proxy, and the `ffmpeg` → media3 `AudioOutput` → upstream float DSP audio engine
+- The upstream features without a macOS equivalent
 - Every Android → JVM shim package and class
