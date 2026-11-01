@@ -113,13 +113,25 @@ class SessionResult @JvmOverloads constructor(
 ) {
     companion object {
         const val RESULT_SUCCESS = 0
+        const val RESULT_ERROR_UNKNOWN = SessionError.ERROR_UNKNOWN
+        const val RESULT_ERROR_INVALID_STATE = SessionError.ERROR_INVALID_STATE
+        const val RESULT_ERROR_BAD_VALUE = SessionError.ERROR_BAD_VALUE
+        const val RESULT_ERROR_PERMISSION_DENIED = SessionError.ERROR_PERMISSION_DENIED
+        const val RESULT_ERROR_IO = SessionError.ERROR_IO
+        const val RESULT_INFO_SKIPPED = 1
+        const val RESULT_ERROR_SESSION_DISCONNECTED = SessionError.ERROR_SESSION_DISCONNECTED
+        const val RESULT_ERROR_NOT_SUPPORTED = SessionError.ERROR_NOT_SUPPORTED
     }
 }
 
 object SessionError {
     const val ERROR_UNKNOWN = -1
+    const val ERROR_INVALID_STATE = -2
     const val ERROR_BAD_VALUE = -3
+    const val ERROR_PERMISSION_DENIED = -4
+    const val ERROR_IO = -5
     const val ERROR_NOT_SUPPORTED = -6
+    const val ERROR_SESSION_DISCONNECTED = -100
 }
 
 class CommandButton private constructor(
@@ -210,9 +222,26 @@ class CacheBitmapLoader(
         uriCache.computeIfAbsent(uri) { bitmapLoader.loadBitmap(it) }
 }
 
-class DefaultMediaNotificationProvider {
-    companion object {
-        const val DEFAULT_NOTIFICATION_ID = 1001
+/**
+ * Desktop port of media3's MediaNotification: the notification id plus the platform Notification.
+ * The desktop NotificationManager shim records (and logs) it; macOS shows playback in the window.
+ */
+class MediaNotification(@JvmField val notificationId: Int, @JvmField val notification: android.app.Notification) {
+    interface ActionFactory
+
+    interface Provider {
+        fun interface Callback {
+            fun onNotificationChanged(notification: MediaNotification)
+        }
+
+        fun createNotification(
+            mediaSession: MediaSession,
+            mediaButtonPreferences: ImmutableList<CommandButton>,
+            actionFactory: ActionFactory,
+            onNotificationChangedCallback: Callback,
+        ): MediaNotification
+
+        fun handleCustomCommand(session: MediaSession, action: String, extras: Bundle): Boolean
     }
 }
 
@@ -263,7 +292,17 @@ open class MediaSession internal constructor(
     class ControllerInfo(
         val packageName: String = "com.stash.app",
         val uid: Int = 0,
-    )
+    ) {
+        /** Every desktop controller is in-process (the app itself), so trusted, as the app's own controllers are. */
+        val isTrusted: Boolean get() = packageName == Context.PACKAGE_NAME
+        val controllerVersion: Int get() = 0
+        val connectionHints: Bundle get() = Bundle.EMPTY
+    }
+
+    /** The desktop has no system media notification, Android Auto or Automotive controller. */
+    fun isMediaNotificationController(controllerInfo: ControllerInfo): Boolean = false
+    fun isAutoCompanionController(controllerInfo: ControllerInfo): Boolean = false
+    fun isAutomotiveController(controllerInfo: ControllerInfo): Boolean = false
 
     class MediaItemsWithStartPosition(
         val mediaItems: List<MediaItem>,
@@ -365,10 +404,61 @@ open class MediaSession internal constructor(
             isForPlayback: Boolean,
         ): ListenableFuture<MediaItemsWithStartPosition> =
             Futures.immediateFailedFuture(UnsupportedOperationException())
+
+        /** Called on the main thread after a controller's player command ran (media3 1.5+). */
+        fun onPlayerInteractionFinished(
+            session: MediaSession,
+            controllerInfo: ControllerInfo,
+            playerCommands: Player.Commands,
+        ) {}
     }
 }
 
-abstract class MediaLibraryService : Service() {
+/**
+ * Desktop port of media3's MediaSessionService notification plumbing. There is no foreground
+ * service on macOS, so the notification a provider builds is handed to the NotificationManager
+ * shim (which records it); the hooks run in the same order as on Android.
+ */
+abstract class MediaSessionService : Service() {
+    private var notificationProvider: MediaNotification.Provider? = null
+    private var showNotificationForIdlePlayer = SHOW_NOTIFICATION_FOR_IDLE_PLAYER_AFTER_STOP_OR_ERROR
+
+    protected abstract fun currentSessionForNotification(): MediaSession?
+
+    fun setMediaNotificationProvider(mediaNotificationProvider: MediaNotification.Provider) {
+        notificationProvider = mediaNotificationProvider
+    }
+
+    fun setShowNotificationForIdlePlayer(showNotificationForIdlePlayerMode: Int) {
+        showNotificationForIdlePlayer = showNotificationForIdlePlayerMode
+    }
+
+    fun triggerNotificationUpdate() {
+        val session = currentSessionForNotification() ?: return
+        onUpdateNotification(session, /* startInForegroundRequired = */ session.player.playWhenReady)
+    }
+
+    open fun onUpdateNotification(session: MediaSession, startInForegroundRequired: Boolean) {
+        val provider = notificationProvider ?: DefaultMediaNotificationProvider(this).also { notificationProvider = it }
+        val idle = session.player.playbackState == Player.STATE_IDLE || session.player.playbackState == Player.STATE_ENDED
+        if (idle && showNotificationForIdlePlayer == SHOW_NOTIFICATION_FOR_IDLE_PLAYER_NEVER) return
+        val notification = provider.createNotification(session, ImmutableList.of(), object : MediaNotification.ActionFactory {}) { updated ->
+            android.app.NotificationManager.INSTANCE.notify(updated.notificationId, updated.notification)
+        }
+        android.app.NotificationManager.INSTANCE.notify(notification.notificationId, notification.notification)
+    }
+
+    open fun isSessionAdded(session: MediaSession): Boolean = currentSessionForNotification() === session
+
+    companion object {
+        const val SERVICE_INTERFACE = "androidx.media3.session.MediaSessionService"
+        const val SHOW_NOTIFICATION_FOR_IDLE_PLAYER_ALWAYS = 1
+        const val SHOW_NOTIFICATION_FOR_IDLE_PLAYER_NEVER = 2
+        const val SHOW_NOTIFICATION_FOR_IDLE_PLAYER_AFTER_STOP_OR_ERROR = 3
+    }
+}
+
+abstract class MediaLibraryService : MediaSessionService() {
 
     class LibraryParams private constructor(
         val extras: Bundle,
@@ -481,6 +571,9 @@ abstract class MediaLibraryService : Service() {
     }
 
     abstract fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession?
+
+    override fun currentSessionForNotification(): MediaSession? =
+        DesktopMediaServiceRegistry.activeSession?.takeIf { (it as? MediaLibrarySession)?.service === this }
 
     override fun onDestroy() {
         DesktopMediaServiceRegistry.unregisterService(this)
@@ -815,9 +908,13 @@ class MediaController internal constructor(
     override fun getPlaybackSuppressionReason(): Int = delegate.playbackSuppressionReason
     override fun isPlaying(): Boolean = delegate.isPlaying
     override fun getPlayerError(): PlaybackException? = delegate.playerError
-    override fun play() = delegate.play()
-    override fun pause() = delegate.pause()
-    override fun setPlayWhenReady(playWhenReady: Boolean) { delegate.playWhenReady = playWhenReady }
+    override fun play() { delegate.play(); interactionFinished(Player.COMMAND_PLAY_PAUSE) }
+    override fun pause() { delegate.pause(); interactionFinished(Player.COMMAND_PLAY_PAUSE) }
+    override fun setPlayWhenReady(playWhenReady: Boolean) { delegate.playWhenReady = playWhenReady; interactionFinished(Player.COMMAND_PLAY_PAUSE) }
+
+    private fun interactionFinished(command: Int) {
+        session.sessionCallback.onPlayerInteractionFinished(session, controllerInfo, Player.Commands.Builder().add(command).build())
+    }
     override fun getPlayWhenReady(): Boolean = delegate.playWhenReady
     override fun setRepeatMode(repeatMode: Int) { delegate.repeatMode = repeatMode }
     override fun getRepeatMode(): Int = delegate.repeatMode

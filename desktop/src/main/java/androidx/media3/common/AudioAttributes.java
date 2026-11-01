@@ -13,9 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * Desktop port (Stash macOS): media3 1.9.2 AudioAttributes, unchanged except that the
- * android.media.AudioAttributes conversions (fromPlatformAudioAttributes,
- * getPlatformAudioAttributes, AudioAttributesV21) and Bundle serialization are omitted.
+ * Desktop port (Stash macOS): media3 1.9.2 AudioAttributes, unchanged except that
+ * fromPlatformAudioAttributes, AudioAttributesV21 and Bundle serialization are omitted, and
+ * getPlatformAudioAttributes builds the desktop android.media.AudioAttributes shim (usage and
+ * content type) instead of caching an AudioAttributesV21.
  */
 package androidx.media3.common;
 
@@ -167,6 +168,11 @@ public final class AudioAttributes {
       default:
         return C.STREAM_TYPE_MUSIC;
     }
+  }
+
+  /** The platform {@code android.media.AudioAttributes} equivalent (usage and content type). */
+  public android.media.AudioAttributes getPlatformAudioAttributes() {
+    return new android.media.AudioAttributes.Builder().setUsage(usage).setContentType(contentType).build();
   }
 
   @Override

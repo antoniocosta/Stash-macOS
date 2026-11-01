@@ -59,6 +59,17 @@ class ActivityResultContracts private constructor() {
         class SingleMimeType(val mimeType: String) : VisualMediaType
     }
 
+    /**
+     * Starts an IntentSender (another app's activity on Android). On the desktop it is sent in-process
+     * and nothing answers with a result, so the outcome is RESULT_CANCELED.
+     */
+    class StartIntentSenderForResult : ActivityResultContract<androidx.activity.result.IntentSenderRequest, androidx.activity.result.ActivityResult>() {
+        override fun resolve(input: androidx.activity.result.IntentSenderRequest): androidx.activity.result.ActivityResult {
+            runCatching { input.intentSender.send(input.fillInIntent) }
+            return androidx.activity.result.ActivityResult(android.app.Activity.RESULT_CANCELED, null)
+        }
+    }
+
     /** Runtime permission request: macOS has no runtime permission model for these, so always granted. */
     class RequestPermission : ActivityResultContract<String, Boolean>() {
         override fun resolve(input: String): Boolean = true

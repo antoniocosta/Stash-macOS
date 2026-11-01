@@ -45,6 +45,15 @@ open class Context protected constructor() : coil3.PlatformContext() {
 
     open fun startActivity(intent: Intent) = DesktopIntents.startActivity(this, intent)
 
+    /** Desktop services are in-process objects (see DesktopMediaServiceRegistry); nothing to start by Intent. */
+    open fun startService(service: Intent): ComponentName? = service.component
+
+    open fun startForegroundService(service: Intent): ComponentName? = service.component
+
+    open fun checkUriPermission(uri: android.net.Uri, pid: Int, uid: Int, modeFlags: Int): Int = android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    open fun getMainExecutor(): java.util.concurrent.Executor = java.util.concurrent.Executor { javax.swing.SwingUtilities.invokeLater(it) }
+
     open fun sendBroadcast(intent: Intent) = DesktopIntents.sendBroadcast(this, intent)
 
     open fun registerReceiver(receiver: BroadcastReceiver?, filter: IntentFilter): Intent? =
@@ -57,9 +66,30 @@ open class Context protected constructor() : coil3.PlatformContext() {
 
     // ── Resources (generated R ids, see com.stash.desktop.res.DesktopResources) ──
 
-    fun getString(resId: Int): String = com.stash.desktop.res.DesktopResources.string(resId)
+    /** Set by [createConfigurationContext] / `applyOverrideConfiguration`: a delta over the system configuration. */
+    internal open val overrideConfiguration: android.content.res.Configuration? get() = null
 
-    fun getString(resId: Int, vararg formatArgs: Any?): String = String.format(getString(resId), *formatArgs)
+    open val resources: android.content.res.Resources
+        get() = android.content.res.Resources {
+            com.stash.desktop.res.DesktopDisplay.configuration().apply { overrideConfiguration?.let(::updateFrom) }
+        }
+
+    /** A Context whose [resources] see [overrideConfiguration] laid over this one's. */
+    open fun createConfigurationContext(overrideConfiguration: android.content.res.Configuration): Context {
+        val combined = android.content.res.Configuration().apply {
+            this@Context.overrideConfiguration?.let(::updateFrom)
+            updateFrom(overrideConfiguration)
+        }
+        return object : ContextWrapper(this@Context) {
+            override val overrideConfiguration get() = combined
+        }
+    }
+
+    fun getString(resId: Int): String = resources.getString(resId)
+
+    fun getString(resId: Int, vararg formatArgs: Any?): String = resources.getString(resId, *formatArgs)
+
+    fun getText(resId: Int): CharSequence = resources.getText(resId)
 
     companion object {
         const val MODE_PRIVATE = 0
@@ -72,6 +102,10 @@ open class Context protected constructor() : coil3.PlatformContext() {
         const val CONNECTIVITY_SERVICE = "connectivity"
         const val NOTIFICATION_SERVICE = "notification"
         const val POWER_SERVICE = "power"
+        const val WIFI_SERVICE = "wifi"
+        const val USAGE_STATS_SERVICE = "usagestats"
+        const val ACCESSIBILITY_SERVICE = "accessibility"
+        const val WINDOW_SERVICE = "window"
 
         private val home = File(System.getProperty("user.home"))
         private val appSupport = File(home, "Library/Application Support/Stash")

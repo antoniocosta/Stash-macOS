@@ -8,4 +8,19 @@ class PackageInfo {
     var longVersionCode: Long = 0
     @JvmField var firstInstallTime: Long = 0
     @JvmField var lastUpdateTime: Long = 0
+    @JvmField var signingInfo: SigningInfo? = null
+    @Deprecated("Use signingInfo") @JvmField var signatures: Array<Signature>? = null
+}
+
+/** Desktop shim for android.content.pm.Signature (a certificate's bytes). */
+class Signature(private val bytes: ByteArray) {
+    fun toByteArray(): ByteArray = bytes.copyOf()
+}
+
+/** Desktop shim for android.content.pm.SigningInfo. */
+class SigningInfo(
+    val apkContentsSigners: Array<Signature> = emptyArray(),
+    val signingCertificateHistory: Array<Signature> = emptyArray(),
+) {
+    fun hasMultipleSigners(): Boolean = apkContentsSigners.size > 1
 }

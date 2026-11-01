@@ -63,13 +63,18 @@ class Bitmap internal constructor(image: BufferedImage) {
 
     enum class CompressFormat { JPEG, PNG }
 
-    enum class Config { ARGB_8888, RGB_565 }
+    enum class Config { ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16, HARDWARE, RGBA_1010102 }
+
+    /** Desktop bitmaps are always software ARGB_8888 (never HARDWARE). */
+    val config: Config get() = Config.ARGB_8888
+
+    fun getPixel(x: Int, y: Int): Int = image.getRGB(x, y)
 
     fun copy(config: Config, isMutable: Boolean): Bitmap {
         val src = img ?: return Bitmap(BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB))
         val type = when (config) {
             Config.RGB_565 -> BufferedImage.TYPE_USHORT_565_RGB
-            Config.ARGB_8888 -> BufferedImage.TYPE_INT_ARGB
+            else -> BufferedImage.TYPE_INT_ARGB
         }
         val dst = BufferedImage(src.width, src.height, type)
         dst.createGraphics().apply {

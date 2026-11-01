@@ -19,5 +19,7 @@ class NetworkCapabilities internal constructor(
         const val NET_CAPABILITY_INTERNET = 12
         const val NET_CAPABILITY_NOT_VPN = 15
         const val NET_CAPABILITY_VALIDATED = 16
+        const val NET_CAPABILITY_TEMPORARILY_NOT_METERED = 25
+        const val NET_CAPABILITY_NOT_ROAMING = 18
     }
 }

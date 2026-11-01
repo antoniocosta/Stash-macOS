@@ -87,8 +87,39 @@ class AudioManager {
         return AUDIOFOCUS_REQUEST_GRANTED
     }
 
+    // ── Output devices (see AudioOutputDevices.kt) ──────────────────────────
+
+    fun getDevices(flags: Int): Array<AudioDeviceInfo> =
+        if (flags and GET_DEVICES_OUTPUTS != 0) arrayOf(AudioDeviceInfo.DEFAULT_OUTPUT) else emptyArray()
+
+    fun getAudioDevicesForAttributes(attributes: AudioAttributes): List<AudioDeviceInfo> = listOf(AudioDeviceInfo.DEFAULT_OUTPUT)
+
+    fun registerAudioDeviceCallback(callback: AudioDeviceCallback, handler: android.os.Handler?) {
+        DesktopAudioDevices.callbacks.addIfAbsent(callback)
+    }
+
+    fun unregisterAudioDeviceCallback(callback: AudioDeviceCallback) {
+        DesktopAudioDevices.callbacks.remove(callback)
+    }
+
+    /** CoreAudio mixes every output; there is no app-selectable mixer configuration to offer. */
+    fun getSupportedMixerAttributes(device: AudioDeviceInfo): List<AudioMixerAttributes> = emptyList()
+
+    fun setPreferredMixerAttributes(attributes: AudioAttributes, device: AudioDeviceInfo, mixerAttributes: AudioMixerAttributes): Boolean = false
+
+    fun getPreferredMixerAttributes(attributes: AudioAttributes, device: AudioDeviceInfo): AudioMixerAttributes? = null
+
+    fun clearPreferredMixerAttributes(attributes: AudioAttributes, device: AudioDeviceInfo): Boolean = true
+
+    fun isStreamMute(streamType: Int): Boolean = false
+
     companion object {
         val INSTANCE = AudioManager()
+
+        const val STREAM_MUSIC = 3
+        const val GET_DEVICES_OUTPUTS = 2
+        const val GET_DEVICES_INPUTS = 1
+        const val GET_DEVICES_ALL = 3
 
         const val AUDIOFOCUS_NONE = 0
         const val AUDIOFOCUS_GAIN = 1

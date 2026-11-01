@@ -22,6 +22,13 @@ class PendingIntent private constructor(
 
     val creatorPackage: String get() = context.packageName
 
+    /** The IntentSender a receiver fills in and sends (an installer status, a picker result). */
+    val intentSender: android.content.IntentSender
+        get() = android.content.IntentSender { fillIn ->
+            val i = Intent(intent).apply { fillIn?.extras?.let { putExtras(it) } }
+            if (broadcast) context.sendBroadcast(i) else context.startActivity(i)
+        }
+
     companion object {
         const val FLAG_ONE_SHOT = 1 shl 30
         const val FLAG_NO_CREATE = 1 shl 29

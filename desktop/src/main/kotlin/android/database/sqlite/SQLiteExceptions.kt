@@ -15,3 +15,4 @@ open class SQLiteConstraintException : SQLiteException {
     constructor() : super()
     constructor(error: String?) : super(error)
 }
+class SQLiteDoneException(message: String? = null) : SQLiteException(message)

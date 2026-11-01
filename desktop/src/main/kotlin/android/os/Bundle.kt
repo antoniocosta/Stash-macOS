@@ -28,6 +28,11 @@ class Bundle() : Parcelable {
     fun putBundle(key: String?, value: Bundle?) { map[key ?: return] = value }
     fun putParcelable(key: String?, value: Parcelable?) { map[key ?: return] = value }
     fun putStringArrayList(key: String?, value: ArrayList<String>?) { map[key ?: return] = value }
+    fun putIntArray(key: String?, value: IntArray?) { map[key ?: return] = value }
+    fun putLongArray(key: String?, value: LongArray?) { map[key ?: return] = value }
+    fun putStringArray(key: String?, value: Array<String>?) { map[key ?: return] = value }
+    fun putParcelableArrayList(key: String?, value: ArrayList<out Parcelable>?) { map[key ?: return] = value }
+    fun putSerializable(key: String?, value: java.io.Serializable?) { map[key ?: return] = value }
 
     fun getString(key: String?): String? = map[key] as? String
     fun getString(key: String?, defaultValue: String): String = getString(key) ?: defaultValue
@@ -47,6 +52,14 @@ class Bundle() : Parcelable {
     fun <T : Parcelable> getParcelable(key: String?): T? = map[key] as? T
     @Suppress("UNCHECKED_CAST")
     fun getStringArrayList(key: String?): ArrayList<String>? = map[key] as? ArrayList<String>
+    fun getIntArray(key: String?): IntArray? = map[key] as? IntArray
+    fun getLongArray(key: String?): LongArray? = map[key] as? LongArray
+    @Suppress("UNCHECKED_CAST")
+    fun getStringArray(key: String?): Array<String>? = map[key] as? Array<String>
+    @Suppress("UNCHECKED_CAST")
+    fun <T : Parcelable> getParcelableArrayList(key: String?): ArrayList<T>? = map[key] as? ArrayList<T>
+    fun <T> getParcelable(key: String?, clazz: Class<T>): T? = map[key]?.takeIf(clazz::isInstance)?.let(clazz::cast)
+    fun getSerializable(key: String?): java.io.Serializable? = map[key] as? java.io.Serializable
 
     override fun toString(): String = "Bundle$map"
 

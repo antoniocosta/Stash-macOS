@@ -35,12 +35,17 @@ import java.net.URI
 fun <T : View> AndroidView(
     factory: (Context) -> T,
     modifier: Modifier = Modifier,
+    onReset: ((T) -> Unit)? = null,
+    onRelease: (T) -> Unit = {},
     update: (T) -> Unit = {},
 ) {
     val context = LocalContext.current
     val view = remember { factory(context) }
     SideEffect {
         update(view)
+    }
+    androidx.compose.runtime.DisposableEffect(view) {
+        onDispose { onRelease(view) }
     }
 
     if (view is WebView) {

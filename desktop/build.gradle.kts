@@ -44,7 +44,9 @@ val upstreamModules = listOf(
     "core/auth",
     "data/spotify",
     "data/ytmusic",
+    "data/soundcloud",
     "core/data",
+    "data/cloud",
     "data/download",
     "data/lyrics",
     "core/ui",
@@ -55,6 +57,9 @@ val upstreamModules = listOf(
     "feature/search",
     "feature/sync",
     "feature/settings",
+    "feature/community",
+    "feature/listening",
+    "feature/record",
     "app",
 )
 
@@ -62,6 +67,9 @@ val upstreamModules = listOf(
 // recorded in PORTING.md. Keep this list as short as humanly possible.
 val androidOnlyUpstreamFiles = listOf<String>(
     "com/stash/data/ytmusic/potoken/BotGuardPoTokenMinter.kt", // android.webkit.WebView
+    "com/stash/app/cast/GoogleCastDevices.kt", // Play Services Cast framework + androidx.mediarouter
+    "com/stash/app/cast/GoogleCastRemote.kt", // Play Services Cast RemoteMediaClient (only GoogleCastDevices uses it)
+    "com/stash/app/cast/StashCastOptionsProvider.kt", // Play Services Cast OptionsProvider (manifest-registered)
 )
 
 // Upstream sources reach the compilers through a build-time mirror
@@ -92,10 +100,13 @@ val appStringsXml = rootDir.resolve("../app/src/main/res/values/strings.xml").re
 val appName = Regex("""<string\s+name="app_name">([^<]+)</string>""").find(appStringsXml)?.groupValues?.get(1) ?: "Stash"
 val supportersUrl = Regex(""""SUPPORTERS_JSON_URL",\s*"\\"([^\\]+)\\""""").find(appGradle)!!.groupValues[1]
 val desktopDebug = providers.gradleProperty("stash.debug").orNull == "true"
+// Same rule as app/build.gradle.kts: release talks to syncReleaseBaseUrl; a debug build may repoint it.
+val syncReleaseBaseUrl = Regex("""val syncReleaseBaseUrl\s*=\s*"([^"]+)"""").find(appGradle)!!.groupValues[1]
+val syncBaseUrl = if (desktopDebug) upstreamProp("sync.baseUrl", "STASH_SYNC_BASE_URL").trim().trimEnd('/').ifEmpty { syncReleaseBaseUrl } else syncReleaseBaseUrl
 
 val generateBuildConfigs by tasks.registering {
     val out = layout.buildDirectory.dir("generated/buildconfig")
-    inputs.property("v", listOf(appVersionCode, appVersionName, supportersUrl, desktopDebug, upstreamLocalProps.toString()))
+    inputs.property("v", listOf(appVersionCode, appVersionName, supportersUrl, syncBaseUrl, desktopDebug, upstreamLocalProps.toString()))
     outputs.dir(out)
     doLast {
         fun q(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
@@ -126,6 +137,13 @@ val generateBuildConfigs by tasks.registering {
             "LASTFM_PROXY_URL" to "String NAME = " + q(upstreamProp("lastfm.proxyUrl", "LASTFM_PROXY_URL")),
             "SUPPORTERS_JSON_URL" to "String NAME = " + q(supportersUrl),
             "STREAMING_ENGINE_ENABLED" to "boolean NAME = true",
+            "DROPBOX_APP_KEY" to "String NAME = " + q(upstreamProp("DROPBOX_APP_KEY", "DROPBOX_APP_KEY").trim()),
+            "ONEDRIVE_CLIENT_ID" to "String NAME = " + q(upstreamProp("ONEDRIVE_CLIENT_ID", "ONEDRIVE_CLIENT_ID").trim()),
+            // Google Drive signs in through Play Services' AuthorizationClient, matched to an Android
+            // OAuth client by package + signing key; neither exists on macOS.
+            "GOOGLE_DRIVE_ENABLED" to "boolean NAME = false",
+            "SYNC_BASE_URL" to "String NAME = " + q(syncBaseUrl),
+            "WEB_LINK_ENABLED" to "boolean NAME = true",
         ))
     }
 }
@@ -139,7 +157,7 @@ sourceSets.named("main") { java.srcDir(generateBuildConfigs) }
 val generateAndroidResources by tasks.registering {
     val javaOut = layout.buildDirectory.dir("generated/res-r")
     val resOut = layout.buildDirectory.dir("generated/res-files")
-    val resDirs = upstreamModules.map { rootDir.resolve("../$it/src/main/res") }
+    val resDirs = upstreamModules.flatMap { listOf(rootDir.resolve("../$it/src/main/res"), rootDir.resolve("../$it/src/main/assets")) }
     resDirs.forEach { if (it.exists()) inputs.dir(it) }
     inputs.property("modules", upstreamModules)
     outputs.dirs(javaOut, resOut)
@@ -154,9 +172,41 @@ val generateAndroidResources by tasks.registering {
             qualifiers.startsWith("anydpi") -> 100
             else -> densityRank.indexOf(qualifiers.substringBefore('-')).let { if (it < 0) 200 else it + 1 }
         }
-        fun unescape(s: String) = s.trim().removeSurrounding("\"")
-            .replace("\\'", "'").replace("\\\"", "\"").replace("\\n", "\n").replace("\\t", "\t")
-            .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+        val translations = sortedMapOf<String, Properties>() // BCP-47 tag -> id(hex)[.quantity] -> text
+        // values-de-rDE -> de-DE, values-fil -> fil; null for non-locale qualifiers (night, v26, ...).
+        fun localeTag(dirName: String): String? =
+            Regex("""values-([a-z]{2,3})(?:-r([A-Z]{2}))?""").matchEntire(dirName)?.let { m ->
+                m.groupValues[1] + m.groupValues[2].let { if (it.isEmpty()) "" else "-$it" }
+            }
+        // aapt2's string compilation: "..." keeps whitespace verbatim, otherwise runs collapse to one
+        // space; backslash escapes (\n \t \' \" \@ \? \\ \uXXXX) are resolved. XML entities and inner
+        // markup (<b>, <xliff:g>) are already handled by the DOM's textContent.
+        fun androidText(raw: String): String {
+            val out = StringBuilder()
+            var quoted = false
+            var i = 0
+            while (i < raw.length) {
+                val c = raw[i]
+                when {
+                    c == '\\' && i + 1 < raw.length -> {
+                        val n = raw[i + 1]
+                        when (n) {
+                            'n' -> out.append('\n')
+                            't' -> out.append('\t')
+                            'u' -> if (i + 5 < raw.length) { out.append(raw.substring(i + 2, i + 6).toInt(16).toChar()); i += 4 }
+                            else -> out.append(n)
+                        }
+                        i += 2
+                        continue
+                    }
+                    c == '"' -> quoted = !quoted
+                    !quoted && c.isWhitespace() -> if (out.isNotEmpty() && out.last() != ' ') out.append(' ')
+                    else -> out.append(c)
+                }
+                i++
+            }
+            return if (raw.trim().startsWith('"')) out.toString() else out.toString().trim()
+        }
         upstreamModules.forEach { module ->
             val res = rootDir.resolve("../$module/src/main/res")
             if (!res.isDirectory) return@forEach
@@ -174,7 +224,7 @@ val generateAndroidResources by tasks.registering {
             // File-based resources (font, drawable, mipmap, raw).
             res.listFiles().orEmpty().filter { it.isDirectory }
                 .map { it to it.name.substringBefore('-') }
-                .filter { (_, type) -> type in setOf("font", "drawable", "mipmap", "raw") }
+                .filter { (_, type) -> type in setOf("font", "drawable", "mipmap", "raw", "xml") }
                 .flatMap { (dir, type) ->
                     val qualifiers = dir.name.substringAfter('-', "")
                     dir.listFiles().orEmpty().map { Triple(type, it, rank(qualifiers)) }
@@ -187,12 +237,52 @@ val generateAndroidResources by tasks.registering {
                     file.copyTo(resRoot.resolve(path), overwrite = true)
                     id(type, key.second, "file:$path")
                 }
-            // values/strings.xml (unqualified locale only).
-            res.resolve("values").listFiles().orEmpty().filter { it.extension == "xml" }.forEach { xml ->
-                Regex("""<string\s+name="([^"]+)"[^>]*>(.*?)</string>""", RegexOption.DOT_MATCHES_ALL)
-                    .findAll(xml.readText()).forEach { m ->
-                        id("string", m.groupValues[1], "string:" + unescape(m.groupValues[2]))
+            // values*/ strings and plurals: ids from the unqualified values/, translations from
+            // values-<lang>[-r<REGION>]/ into stash-res/strings_<tag>.properties (same id keys).
+            fun valueDirs() = res.listFiles().orEmpty().filter { it.isDirectory && (it.name == "values" || localeTag(it.name) != null) }
+            valueDirs().sortedBy { it.name != "values" }.forEach { dir ->
+                val tag = localeTag(dir.name)
+                val target = if (tag == null) index else translations.getOrPut(tag) { Properties() }
+                dir.listFiles().orEmpty().filter { it.extension == "xml" }.sorted().forEach { xml ->
+                    val root = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xml).documentElement
+                    val nodes = root.childNodes
+                    for (i in 0 until nodes.length) {
+                        val el = nodes.item(i) as? org.w3c.dom.Element ?: continue
+                        val name = el.getAttribute("name")
+                        when (el.tagName) {
+                            "string" -> if (tag == null) {
+                                id("string", name, "string:" + androidText(el.textContent))
+                            } else {
+                                entries["string"]?.get(name)?.let { target.setProperty(Integer.toHexString(it), androidText(el.textContent)) }
+                            }
+                            "plurals" -> {
+                                val key = if (tag == null) id("plurals", name, "plurals:") else entries["plurals"]?.get(name) ?: continue
+                                val items = el.getElementsByTagName("item")
+                                for (j in 0 until items.length) {
+                                    val item = items.item(j) as org.w3c.dom.Element
+                                    target.setProperty(Integer.toHexString(key) + "." + item.getAttribute("quantity"), androidText(item.textContent))
+                                }
+                            }
+                        }
                     }
+                }
+            }
+            // AGP's generateLocaleConfig: res/xml/_generated_res_locale_config.xml in the app, listing
+            // the unqualified locale (resources.properties) plus every translated values-* locale.
+            if (module == "app") {
+                val unqualified = res.resolve("resources.properties").takeIf { it.exists() }
+                    ?.let { Properties().apply { it.inputStream().use(::load) }.getProperty("unqualifiedResLocale") } ?: "en"
+                val tags = (listOf(unqualified) + upstreamModules.flatMap { m ->
+                    rootDir.resolve("../$m/src/main/res").listFiles().orEmpty().mapNotNull { localeTag(it.name) }
+                }).distinct()
+                val path = "stash-res/$namespace/xml/_generated_res_locale_config.xml"
+                resRoot.resolve(path).apply { parentFile.mkdirs() }.writeText(buildString {
+                    appendLine("""<?xml version="1.0" encoding="utf-8"?>""")
+                    appendLine("""<locale-config xmlns:android="http://schemas.android.com/apk/res/android">""")
+                    tags.forEach { appendLine("""    <locale android:name="$it"/>""") }
+                    appendLine("</locale-config>")
+                })
+                id("xml", "_generated_res_locale_config", "file:$path")
             }
             val f = javaRoot.resolve(namespace.replace('.', '/') + "/R.java")
             f.parentFile.mkdirs()
@@ -208,7 +298,15 @@ val generateAndroidResources by tasks.registering {
                 appendLine("}")
             })
         }
-        resRoot.resolve("stash-res/index.properties").outputStream().use { index.store(it, "id(hex) -> file:<classpath>|string:<text>") }
+        // Assets: AGP merges every module's src/main/assets into one AssetManager root.
+        upstreamModules.map { rootDir.resolve("../$it/src/main/assets") }.filter { it.isDirectory }.forEach { assets ->
+            assets.copyRecursively(resRoot.resolve("stash-assets"), overwrite = true)
+        }
+        resRoot.resolve("stash-res/index.properties").outputStream().use { index.store(it, "id(hex) -> file:<classpath>|string:<text>|plurals: (+ id.quantity -> text)") }
+        translations.forEach { (tag, props) ->
+            resRoot.resolve("stash-res/strings_$tag.properties").outputStream().use { props.store(it, "$tag: id(hex)[.quantity] -> text") }
+        }
+        resRoot.resolve("stash-res/locales.txt").writeText(translations.keys.joinToString("\n"))
     }
 }
 sourceSets.named("main") {
@@ -250,8 +348,12 @@ dependencies {
     implementation(libs.datastore.preferences)
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
+    implementation(libs.okhttp.dnsoverhttps)
+    implementation(libs.haze) // multiplatform; resolves to haze-jvm
+    implementation(libs.zxing.core) // pure Java
     implementation(libs.kotlinx.serialization.json)
     implementation("org.json:json:20250517") // org.json ships inside the Android framework; reference implementation on the JVM
+    implementation("net.sf.kxml:kxml2:2.3.0") // XmlPullParser + kXML, the parser the Android framework bundles
     implementation("com.google.crypto.tink:tink:${libs.versions.tink.get()}") // JVM flavour of tink-android
     implementation("com.google.guava:guava:33.4.8-jre") // ListenableFuture/ImmutableList used by WorkManager + media3 APIs
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-guava:${libs.versions.coroutines.get()}") // == upstream libs.kotlinx.coroutines.guava
@@ -390,6 +492,7 @@ afterEvaluate {
                             ZipOutputStream(tmp.outputStream().buffered()).use { zout ->
                                 generateSequence { zin.nextEntry }.forEach { e ->
                                     val strip = e.name == "androidx/room/migration/Migration.class" ||
+                        e.name == "androidx/room/InvalidationTracker.class" ||
                                         e.name == "coil3/PlatformContext.class" ||
                                         e.name.startsWith("coil3/PlatformContext$") ||
                                         e.name == "androidx/navigation/serialization/NavTypeConverter_nonAndroidKt.class" ||
@@ -495,6 +598,7 @@ abstract class StripRoomMigration : TransformAction<TransformParameters.None> {
             ZipOutputStream(output.outputStream().buffered()).use { zout ->
                 generateSequence { zin.nextEntry }.forEach { e ->
                     val strip = e.name == "androidx/room/migration/Migration.class" ||
+                        e.name == "androidx/room/InvalidationTracker.class" ||
                         e.name == "coil3/PlatformContext.class" ||
                         e.name.startsWith("coil3/PlatformContext$") ||
                         e.name == "androidx/navigation/serialization/NavTypeConverter_nonAndroidKt.class" ||
@@ -526,3 +630,9 @@ configurations.matching { it.name.endsWith("CompileClasspath") || it.name.endsWi
     attributes.attribute(roomMigrationStripped, true)
 }
 
+
+// Tests that need the network (streaming a YouTube Music search result) run only on request:
+// `./gradlew -p desktop test -Pstash.networkTests=true`.
+tasks.withType<Test>().configureEach {
+    systemProperty("stash.networkTests", providers.gradleProperty("stash.networkTests").getOrElse("false"))
+}

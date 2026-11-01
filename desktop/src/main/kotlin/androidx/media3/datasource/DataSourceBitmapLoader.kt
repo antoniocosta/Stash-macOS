@@ -1,6 +1,8 @@
 package androidx.media3.datasource
 
+import android.content.Context
 import android.graphics.Bitmap
+import androidx.media3.common.C
 import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.media3.common.util.BitmapLoader
@@ -19,19 +21,47 @@ import javax.imageio.ImageIO
  * [DataSource.Factory] on [listeningExecutorService] and decodes them with [BitmapFactory]
  * (javax.imageio on desktop).
  */
-class DataSourceBitmapLoader(
+class DataSourceBitmapLoader @JvmOverloads constructor(
     private val listeningExecutorService: ListeningExecutorService,
     private val dataSourceFactory: DataSource.Factory,
+    private val maximumOutputDimension: Int = C.LENGTH_UNSET,
 ) : BitmapLoader {
+
+    constructor(context: Context) : this(DEFAULT_EXECUTOR_SERVICE.get(), DefaultDataSource.Factory(context))
+
+    /** media3 1.9's Builder. */
+    class Builder(private val context: Context) {
+        private var executorService: ListeningExecutorService? = null
+        private var dataSourceFactory: DataSource.Factory? = null
+        private var maximumOutputDimension: Int = C.LENGTH_UNSET
+
+        fun setExecutorService(executorService: ListeningExecutorService): Builder = apply { this.executorService = executorService }
+        fun setDataSourceFactory(dataSourceFactory: DataSource.Factory): Builder = apply { this.dataSourceFactory = dataSourceFactory }
+        fun setMaximumOutputDimension(maximumOutputDimension: Int): Builder = apply { this.maximumOutputDimension = maximumOutputDimension }
+
+        fun build(): DataSourceBitmapLoader = DataSourceBitmapLoader(
+            executorService ?: DEFAULT_EXECUTOR_SERVICE.get(),
+            dataSourceFactory ?: DefaultDataSource.Factory(context),
+            maximumOutputDimension,
+        )
+    }
 
     override fun supportsMimeType(mimeType: String): Boolean =
         ImageIO.getReaderMIMETypes().any { it.equals(mimeType, ignoreCase = true) }
 
     override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> =
-        listeningExecutorService.submit<Bitmap> { decode(data) }
+        listeningExecutorService.submit<Bitmap> { capped(decode(data)) }
 
     override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> =
-        listeningExecutorService.submit<Bitmap> { load(dataSourceFactory.createDataSource(), uri) }
+        listeningExecutorService.submit<Bitmap> { capped(load(dataSourceFactory.createDataSource(), uri)) }
+
+    /** Downscale (aspect kept) so neither side exceeds [maximumOutputDimension], like media3's inSampleSize + scale. */
+    private fun capped(bitmap: Bitmap): Bitmap {
+        val max = maximumOutputDimension
+        if (max == C.LENGTH_UNSET || (bitmap.width <= max && bitmap.height <= max)) return bitmap
+        val scale = max.toDouble() / maxOf(bitmap.width, bitmap.height)
+        return Bitmap.createScaledBitmap(bitmap, maxOf(1, (bitmap.width * scale).toInt()), maxOf(1, (bitmap.height * scale).toInt()), true)
+    }
 
     companion object {
         /** The default [ListeningExecutorService] used to load bitmaps. */

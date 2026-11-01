@@ -37,6 +37,14 @@ open class PackageManager internal constructor() {
 
     open fun checkPermission(permName: String, packageName: String): Int = PERMISSION_GRANTED
 
+    /** macOS can't install Android packages: the in-app updater's APK path is never permitted. */
+    open fun canRequestPackageInstalls(): Boolean = false
+
+    /** No APK parser on the desktop: an archive is never recognised (upstream then reports NOT_AN_UPDATE). */
+    open fun getPackageArchiveInfo(archiveFilePath: String, flags: Int): PackageInfo? = null
+
+    open val packageInstaller: PackageInstaller get() = PackageInstaller.INSTANCE
+
     class NameNotFoundException(name: String? = null) : Exception(name)
 
     companion object {
@@ -45,6 +53,8 @@ open class PackageManager internal constructor() {
         const val MATCH_DEFAULT_ONLY = 0x00010000
         const val MATCH_ALL = 0x00020000
         const val GET_META_DATA = 0x00000080
+        const val GET_SIGNATURES = 0x00000040
+        const val GET_SIGNING_CERTIFICATES = 0x08000000
 
         /** From the generated com.stash.app.BuildConfig (read from upstream app/build.gradle.kts). */
         internal const val VERSION_NAME = com.stash.app.BuildConfig.VERSION_NAME

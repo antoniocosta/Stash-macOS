@@ -73,6 +73,11 @@ abstract class CoroutineWorker(
 
     suspend fun setProgress(data: Data) = params.onProgress(data)
 
+    fun setProgressAsync(data: Data): com.google.common.util.concurrent.ListenableFuture<Void?> {
+        params.onProgress(data)
+        return com.google.common.util.concurrent.Futures.immediateFuture(null)
+    }
+
     suspend fun setForeground(foregroundInfo: ForegroundInfo) = params.onForeground(foregroundInfo)
 
     internal override suspend fun runWork(): Result = doWork()
@@ -124,10 +129,37 @@ class WorkInfo(
     val progress: Data = Data.EMPTY,
     val runAttemptCount: Int = 0,
     val generation: Int = 0,
+    val constraints: Constraints = Constraints.NONE,
+    val initialDelayMillis: Long = 0L,
+    val periodicityInfo: PeriodicityInfo? = null,
+    val nextScheduleTimeMillis: Long = Long.MAX_VALUE,
+    val stopReason: Int = STOP_REASON_NOT_STOPPED,
 ) {
     enum class State {
         ENQUEUED, RUNNING, SUCCEEDED, FAILED, BLOCKED, CANCELLED;
         val isFinished: Boolean get() = this == SUCCEEDED || this == FAILED || this == CANCELLED
+    }
+
+    class PeriodicityInfo(val repeatIntervalMillis: Long, val flexIntervalMillis: Long)
+
+    companion object {
+        const val STOP_REASON_NOT_STOPPED = -256
+        const val STOP_REASON_UNKNOWN = -512
+        const val STOP_REASON_CANCELLED_BY_APP = 1
+        const val STOP_REASON_PREEMPT = 2
+        const val STOP_REASON_TIMEOUT = 3
+        const val STOP_REASON_DEVICE_STATE = 4
+        const val STOP_REASON_CONSTRAINT_BATTERY_NOT_LOW = 5
+        const val STOP_REASON_CONSTRAINT_CHARGING = 6
+        const val STOP_REASON_CONSTRAINT_CONNECTIVITY = 7
+        const val STOP_REASON_CONSTRAINT_DEVICE_IDLE = 8
+        const val STOP_REASON_CONSTRAINT_STORAGE_NOT_LOW = 9
+        const val STOP_REASON_QUOTA = 10
+        const val STOP_REASON_BACKGROUND_RESTRICTION = 11
+        const val STOP_REASON_APP_STANDBY = 12
+        const val STOP_REASON_USER = 13
+        const val STOP_REASON_SYSTEM_PROCESSING = 14
+        const val STOP_REASON_ESTIMATED_APP_LAUNCH_TIME_CHANGED = 15
     }
 
     override fun toString() = "WorkInfo{id='$id', state=$state, tags=$tags, outputData=$outputData, progress=$progress}"

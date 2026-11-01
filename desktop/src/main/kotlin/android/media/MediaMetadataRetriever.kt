@@ -35,6 +35,9 @@ class MediaMetadataRetriever : AutoCloseable {
         val p = probe ?: return null
         return when (keyCode) {
             METADATA_KEY_ALBUM -> p.tag("album")
+            METADATA_KEY_ALBUMARTIST -> p.tag("album_artist") ?: p.tag("albumartist")
+            METADATA_KEY_HAS_AUDIO -> if (p.streams.any { p.str(it, "codec_type") == "audio" }) "yes" else null
+            METADATA_KEY_HAS_VIDEO -> if (p.streams.any { p.str(it, "codec_type") == "video" && !p.isAttachedPic(it) }) "yes" else null
             METADATA_KEY_ARTIST -> p.tag("artist")
             METADATA_KEY_TITLE -> p.tag("title")
             METADATA_KEY_DURATION -> durationMs(p)?.toString()
@@ -93,5 +96,8 @@ class MediaMetadataRetriever : AutoCloseable {
         const val METADATA_KEY_DURATION = 9
         const val METADATA_KEY_MIMETYPE = 12
         const val METADATA_KEY_BITRATE = 20
+        const val METADATA_KEY_ALBUMARTIST = 13
+        const val METADATA_KEY_HAS_AUDIO = 16
+        const val METADATA_KEY_HAS_VIDEO = 17
     }
 }

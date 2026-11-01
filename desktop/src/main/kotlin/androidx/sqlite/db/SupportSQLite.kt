@@ -40,6 +40,22 @@ interface SupportSQLiteDatabase : Closeable {
     fun setTransactionSuccessful()
     fun endTransaction()
     fun inTransaction(): Boolean
+    fun compileStatement(sql: String): SupportSQLiteStatement
+}
+
+/** androidx.sqlite's SupportSQLiteStatement: a reusable statement with 1-based bind indexes. */
+interface SupportSQLiteStatement : Closeable {
+    fun bindNull(index: Int)
+    fun bindLong(index: Int, value: Long)
+    fun bindDouble(index: Int, value: Double)
+    fun bindString(index: Int, value: String)
+    fun bindBlob(index: Int, value: ByteArray)
+    fun clearBindings()
+    fun execute()
+    fun executeUpdateDelete(): Int
+    fun executeInsert(): Long
+    fun simpleQueryForLong(): Long
+    fun simpleQueryForString(): String?
 }
 
 interface SupportSQLiteOpenHelper {

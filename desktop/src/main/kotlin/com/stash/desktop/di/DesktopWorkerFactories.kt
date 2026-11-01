@@ -7,8 +7,11 @@ import com.stash.core.data.share.SharedMixFollowWorker
 import com.stash.core.data.share.SharedMixPublishWorker
 import com.stash.core.data.share.SharedMixUnshareWorker
 import com.stash.core.data.sync.workers.ArtBackfillWorker
+import com.stash.core.data.sync.workers.ArtistGenreWorker
 import com.stash.core.data.sync.workers.ArtistImageBackfillWorker
 import com.stash.core.data.sync.workers.BlocklistIntegrityWorker
+import com.stash.core.data.sync.workers.CanonicalRecomputeWorker
+import com.stash.core.data.sync.workers.DailySyncTriggerWorker
 import com.stash.core.data.sync.workers.DiffWorker
 import com.stash.core.data.sync.workers.DiscoveryDownloadWorker
 import com.stash.core.data.sync.workers.FlacUpgradeWorker
@@ -21,12 +24,19 @@ import com.stash.core.data.sync.workers.SyncFinalizeWorker
 import com.stash.core.data.sync.workers.TagEnrichmentWorker
 import com.stash.core.data.sync.workers.TrackDownloadWorker
 import com.stash.core.data.sync.workers.TrackInfoEnrichmentWorker
+import com.stash.core.data.weblink.mirror.MirrorSyncWorker
+import com.stash.data.cloud.scan.CloudScanWorker
+import com.stash.data.cloud.upload.CloudUploadWorker
 import com.stash.data.download.backfill.MetadataBackfillWorker
 import com.stash.data.download.backfill.YtLibraryBackfillWorker
 import com.stash.data.download.lossless.LosslessRetryWorker
 import com.stash.data.download.ytdlp.YtDlpUpdateWorker
 import com.stash.data.lyrics.worker.LyricsFetchWorker
 import com.stash.data.lyrics.worker.LyricsTtmlUpgradeWorker
+import com.stash.feature.record.imports.RecordImportWorker
+import com.stash.feature.record.lastfm.RecordLastfmWorker
+import com.stash.feature.record.lastfm.RecordLengthsWorker
+import com.stash.feature.record.taste.RecordTasteWorker
 import dagger.assisted.AssistedFactory
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -151,6 +161,56 @@ interface MetadataBackfillWorkerFactory {
     fun create(appContext: Context, params: WorkerParameters): MetadataBackfillWorker
 }
 
+@AssistedFactory
+interface MirrorSyncWorkerFactory {
+    fun create(appContext: Context, params: WorkerParameters): MirrorSyncWorker
+}
+
+@AssistedFactory
+interface CanonicalRecomputeWorkerFactory {
+    fun create(appContext: Context, params: WorkerParameters): CanonicalRecomputeWorker
+}
+
+@AssistedFactory
+interface DailySyncTriggerWorkerFactory {
+    fun create(appContext: Context, params: WorkerParameters): DailySyncTriggerWorker
+}
+
+@AssistedFactory
+interface ArtistGenreWorkerFactory {
+    fun create(appContext: Context, params: WorkerParameters): ArtistGenreWorker
+}
+
+@AssistedFactory
+interface RecordLastfmWorkerFactory {
+    fun create(context: Context, params: WorkerParameters): RecordLastfmWorker
+}
+
+@AssistedFactory
+interface RecordLengthsWorkerFactory {
+    fun create(context: Context, params: WorkerParameters): RecordLengthsWorker
+}
+
+@AssistedFactory
+interface RecordImportWorkerFactory {
+    fun create(context: Context, params: WorkerParameters): RecordImportWorker
+}
+
+@AssistedFactory
+interface RecordTasteWorkerFactory {
+    fun create(context: Context, params: WorkerParameters): RecordTasteWorker
+}
+
+@AssistedFactory
+interface CloudScanWorkerFactory {
+    fun create(context: Context, params: WorkerParameters): CloudScanWorker
+}
+
+@AssistedFactory
+interface CloudUploadWorkerFactory {
+    fun create(context: Context, params: WorkerParameters): CloudUploadWorker
+}
+
 @Singleton
 class DesktopWorkerRegistrar @Inject constructor(
     private val workerFactory: HiltWorkerFactory,
@@ -178,6 +238,16 @@ class DesktopWorkerRegistrar @Inject constructor(
     private val ytDlpUpdate: YtDlpUpdateWorkerFactory,
     private val ytLibraryBackfill: YtLibraryBackfillWorkerFactory,
     private val metadataBackfill: MetadataBackfillWorkerFactory,
+    private val mirrorSync: MirrorSyncWorkerFactory,
+    private val canonicalRecompute: CanonicalRecomputeWorkerFactory,
+    private val dailySyncTrigger: DailySyncTriggerWorkerFactory,
+    private val artistGenre: ArtistGenreWorkerFactory,
+    private val recordLastfm: RecordLastfmWorkerFactory,
+    private val recordLengths: RecordLengthsWorkerFactory,
+    private val recordImport: RecordImportWorkerFactory,
+    private val recordTaste: RecordTasteWorkerFactory,
+    private val cloudScan: CloudScanWorkerFactory,
+    private val cloudUpload: CloudUploadWorkerFactory,
 ) {
     fun registerAll() {
         workerFactory.register<ArtBackfillWorker>(artBackfill::create)
@@ -204,5 +274,15 @@ class DesktopWorkerRegistrar @Inject constructor(
         workerFactory.register<YtDlpUpdateWorker>(ytDlpUpdate::create)
         workerFactory.register<YtLibraryBackfillWorker>(ytLibraryBackfill::create)
         workerFactory.register<MetadataBackfillWorker>(metadataBackfill::create)
+        workerFactory.register<MirrorSyncWorker>(mirrorSync::create)
+        workerFactory.register<CanonicalRecomputeWorker>(canonicalRecompute::create)
+        workerFactory.register<DailySyncTriggerWorker>(dailySyncTrigger::create)
+        workerFactory.register<ArtistGenreWorker>(artistGenre::create)
+        workerFactory.register<RecordLastfmWorker>(recordLastfm::create)
+        workerFactory.register<RecordLengthsWorker>(recordLengths::create)
+        workerFactory.register<RecordImportWorker>(recordImport::create)
+        workerFactory.register<RecordTasteWorker>(recordTaste::create)
+        workerFactory.register<CloudScanWorker>(cloudScan::create)
+        workerFactory.register<CloudUploadWorker>(cloudUpload::create)
     }
 }

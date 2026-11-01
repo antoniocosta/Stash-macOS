@@ -11,6 +11,15 @@ object Environment {
     const val MEDIA_UNKNOWN = "unknown"
     const val MEDIA_REMOVED = "removed"
     const val MEDIA_MOUNTED = "mounted"
+    const val DIRECTORY_DOWNLOADS = "Download"
+    const val DIRECTORY_MUSIC = "Music"
+    const val DIRECTORY_PICTURES = "Pictures"
+    const val DIRECTORY_DOCUMENTS = "Documents"
+
+    /** The macOS counterpart of a shared-storage directory (~/Downloads for "Download", else ~/<name>). */
+    @JvmStatic
+    fun getExternalStoragePublicDirectory(type: String): File =
+        File(System.getProperty("user.home"), if (type == DIRECTORY_DOWNLOADS) "Downloads" else type)
 
     @JvmStatic
     fun getExternalStorageState(path: File): String {

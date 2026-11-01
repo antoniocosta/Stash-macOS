@@ -68,6 +68,11 @@ class NotificationCompat private constructor() {
         const val FOREGROUND_SERVICE_IMMEDIATE = 1
         const val FOREGROUND_SERVICE_DEFERRED = 2
 
+        const val CATEGORY_ERROR = "err"
+        const val CATEGORY_PROGRESS = "progress"
+        const val CATEGORY_SERVICE = "service"
+        const val CATEGORY_STATUS = "status"
+        const val CATEGORY_TRANSPORT = "transport"
         const val PRIORITY_MIN = -2
         const val PRIORITY_LOW = -1
         const val PRIORITY_DEFAULT = 0

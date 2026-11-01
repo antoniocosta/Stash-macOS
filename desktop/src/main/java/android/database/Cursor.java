@@ -36,6 +36,9 @@ public interface Cursor extends Closeable {
     float getFloat(int columnIndex);
     byte[] getBlob(int columnIndex);
 
+    /** Provider extras (DocumentsContract.EXTRA_LOADING / EXTRA_ERROR); none on the desktop. */
+    default android.os.Bundle getExtras() { return android.os.Bundle.EMPTY; }
+
     @Override
     void close();
 }

@@ -9,5 +9,7 @@ object R {
         const val stat_notify_error = 0x01080078
         const val stat_sys_download = 0x01080081
         const val stat_sys_download_done = 0x01080082
+        const val stat_sys_upload = 0x01080088
+        const val stat_sys_upload_done = 0x01080089
     }
 }

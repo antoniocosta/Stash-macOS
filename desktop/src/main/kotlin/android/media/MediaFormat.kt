@@ -18,6 +18,11 @@ class MediaFormat {
     override fun toString(): String = map.toString()
 
     companion object {
+        const val MIMETYPE_AUDIO_RAW = "audio/raw"
+        const val MIMETYPE_AUDIO_FLAC = "audio/flac"
+        const val MIMETYPE_AUDIO_AAC = "audio/mp4a-latm"
+        const val MIMETYPE_AUDIO_MPEG = "audio/mpeg"
+        const val MIMETYPE_AUDIO_OPUS = "audio/opus"
         const val KEY_MIME = "mime"
         const val KEY_SAMPLE_RATE = "sample-rate"
         const val KEY_CHANNEL_COUNT = "channel-count"

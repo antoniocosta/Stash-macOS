@@ -31,7 +31,35 @@ class ConnectivityManager private constructor() {
         return NetworkCapabilities(transports, caps)
     }
 
-    fun isActiveNetworkMetered(): Boolean = false
+    val isActiveNetworkMetered: Boolean get() = false
+
+    /** Android's NetworkCallback; the desktop reports the current default network once on registration. */
+    open class NetworkCallback {
+        open fun onAvailable(network: Network) {}
+        open fun onLost(network: Network) {}
+        open fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {}
+        open fun onUnavailable() {}
+    }
+
+    private val callbacks = java.util.concurrent.CopyOnWriteArrayList<NetworkCallback>()
+
+    fun registerDefaultNetworkCallback(networkCallback: NetworkCallback) {
+        callbacks.addIfAbsent(networkCallback)
+        activeNetwork?.let { n ->
+            networkCallback.onAvailable(n)
+            getNetworkCapabilities(n)?.let { networkCallback.onCapabilitiesChanged(n, it) }
+        }
+    }
+
+    fun registerDefaultNetworkCallback(networkCallback: NetworkCallback, handler: android.os.Handler?) =
+        registerDefaultNetworkCallback(networkCallback)
+
+    fun unregisterNetworkCallback(networkCallback: NetworkCallback) {
+        callbacks.remove(networkCallback)
+    }
+
+    /** macOS has no per-app Data Saver. */
+    val restrictBackgroundStatus: Int get() = RESTRICT_BACKGROUND_STATUS_DISABLED
 
     private fun interfaces(): List<NetworkInterface> = runCatching {
         NetworkInterface.getNetworkInterfaces().toList().filter { it.isUp && !it.isLoopback && !isVirtual(it.name) }
@@ -56,6 +84,9 @@ class ConnectivityManager private constructor() {
     }
 
     companion object {
+        const val RESTRICT_BACKGROUND_STATUS_DISABLED = 1
+        const val RESTRICT_BACKGROUND_STATUS_WHITELISTED = 2
+        const val RESTRICT_BACKGROUND_STATUS_ENABLED = 3
         private val VIRTUAL_PREFIXES = listOf("awdl", "llw", "bridge", "anpi", "ap", "gif", "stf", "vmenet")
         internal val INSTANCE = ConnectivityManager()
     }

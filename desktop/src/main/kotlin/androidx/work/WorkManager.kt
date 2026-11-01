@@ -66,6 +66,14 @@ abstract class WorkManager internal constructor() {
     abstract fun getWorkInfosForUniqueWork(uniqueWorkName: String): ListenableFuture<List<WorkInfo>>
     abstract fun getWorkInfosForUniqueWorkFlow(uniqueWorkName: String): Flow<List<WorkInfo>>
 
+    abstract fun getWorkInfos(workQuery: WorkQuery): ListenableFuture<List<WorkInfo>>
+    abstract fun getWorkInfosFlow(workQuery: WorkQuery): Flow<List<WorkInfo>>
+
+    /** Replaces the spec of enqueued work in place (same id); a running worker keeps its old spec. */
+    abstract fun updateWork(request: WorkRequest): ListenableFuture<UpdateResult>
+
+    enum class UpdateResult { NOT_APPLIED, APPLIED_IMMEDIATELY, APPLIED_FOR_NEXT_RUN }
+
     abstract fun createCancelPendingIntent(id: UUID): PendingIntent
 
     companion object {
@@ -140,8 +148,17 @@ internal class DesktopWorkManager(
         @Volatile var attempt = 0
         @Volatile var job: Job? = null
         @Volatile var worker: ListenableWorker? = null
+        @Volatile var nextRunAt: Long = Long.MAX_VALUE
+        @Volatile var stopReason: Int = WorkInfo.STOP_REASON_NOT_STOPPED
         val id: UUID get() = request.id
-        fun info() = WorkInfo(id, state, request.tags, output, progress, attempt)
+        fun info() = WorkInfo(
+            id, state, request.tags, output, progress, attempt,
+            constraints = request.constraints,
+            initialDelayMillis = request.initialDelayMillis,
+            periodicityInfo = (request as? PeriodicWorkRequest)?.let { WorkInfo.PeriodicityInfo(it.intervalMillis, it.intervalMillis) },
+            nextScheduleTimeMillis = if (state == WorkInfo.State.ENQUEUED) nextRunAt else Long.MAX_VALUE,
+            stopReason = stopReason,
+        )
     }
 
     private val lock = Any()
@@ -181,6 +198,14 @@ internal class DesktopWorkManager(
                 live != null && existingPeriodicWorkPolicy == ExistingPeriodicWorkPolicy.UPDATE -> {
                     // Keep id and timing; the new spec applies from the next run.
                     live.request = rebind(request, live.id)
+                    if (request.nextScheduleTimeOverride != Long.MAX_VALUE && live.state == WorkInfo.State.ENQUEUED) {
+                        // Re-time the waiting period: restart its loop with the new spec.
+                        live.job?.cancel()
+                        live.job = null
+                        changed()
+                        trySchedule(live.id)
+                        return DoneOperation
+                    }
                     changed()
                     return DoneOperation
                 }
@@ -202,6 +227,7 @@ internal class DesktopWorkManager(
             r.intervalMillis, TimeUnit.MILLISECONDS)
             .setId(id).setConstraints(r.constraints).setInputData(r.inputData)
             .setBackoffCriteria(r.backoffPolicy, r.backoffDelayMillis, TimeUnit.MILLISECONDS)
+            .setNextScheduleTimeOverride(r.nextScheduleTimeOverride)
             .also { b -> r.tags.forEach { b.addTag(it) } }
             .build()
 
@@ -290,7 +316,11 @@ internal class DesktopWorkManager(
                 delayMs = maxOf(delayMs, last + interval - System.currentTimeMillis())
             }
         }
+        (rec.request as? PeriodicWorkRequest)?.nextScheduleTimeOverride?.takeIf { it != Long.MAX_VALUE }?.let {
+            delayMs = it - System.currentTimeMillis()
+        }
         while (true) {
+            rec.nextRunAt = System.currentTimeMillis() + delayMs.coerceAtLeast(0L)
             if (delayMs > 0) delay(delayMs)
             val req = rec.request
             val result = runOnce(rec, req, if (req is PeriodicWorkRequest) req.inputData else input) ?: return
@@ -383,6 +413,7 @@ internal class DesktopWorkManager(
         rec.job?.cancel()
         rec.job = null
         rec.state = WorkInfo.State.CANCELLED
+        rec.stopReason = WorkInfo.STOP_REASON_CANCELLED_BY_APP
         recs.values.filter { rec.id in it.prerequisites }.forEach { cancel(it) }
     }
 
@@ -416,6 +447,29 @@ internal class DesktopWorkManager(
         DoneFuture(infos { it.uniqueName == uniqueWorkName })
     override fun getWorkInfosForUniqueWorkFlow(uniqueWorkName: String): Flow<List<WorkInfo>> =
         version.map { infos { it.uniqueName == uniqueWorkName } }.distinctUntilChanged()
+
+    private fun matches(q: WorkQuery, r: Rec): Boolean =
+        (q.ids.isEmpty() || r.id in q.ids) &&
+            (q.tags.isEmpty() || q.tags.any { it in r.request.tags }) &&
+            (q.uniqueWorkNames.isEmpty() || r.uniqueName in q.uniqueWorkNames) &&
+            (q.states.isEmpty() || r.state in q.states)
+
+    override fun getWorkInfos(workQuery: WorkQuery): ListenableFuture<List<WorkInfo>> = DoneFuture(infos { matches(workQuery, it) })
+    override fun getWorkInfosFlow(workQuery: WorkQuery): Flow<List<WorkInfo>> =
+        version.map { infos { matches(workQuery, it) } }.distinctUntilChanged()
+
+    override fun updateWork(request: WorkRequest): ListenableFuture<UpdateResult> {
+        val result = synchronized(lock) {
+            val rec = recs[request.id] ?: throw IllegalArgumentException("WorkSpec with ${request.id} doesn't exist")
+            when {
+                rec.state.isFinished -> UpdateResult.NOT_APPLIED
+                rec.state == WorkInfo.State.RUNNING -> { rec.request = request; UpdateResult.APPLIED_FOR_NEXT_RUN }
+                else -> { rec.request = request; UpdateResult.APPLIED_IMMEDIATELY }
+            }
+        }
+        changed()
+        return DoneFuture(result)
+    }
 
     override fun createCancelPendingIntent(id: UUID): PendingIntent =
         PendingIntent.getBroadcast(

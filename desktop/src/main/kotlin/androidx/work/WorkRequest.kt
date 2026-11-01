@@ -115,6 +115,7 @@ class PeriodicWorkRequest internal constructor(b: Builder) : WorkRequest(
     b.initialDelayMillis, b.backoffPolicy, b.backoffDelayMillis,
 ) {
     internal val intervalMillis: Long = b.intervalMillis
+    internal val nextScheduleTimeOverride: Long = b.nextScheduleTimeOverride
 
     class Builder private constructor(workerClass: Class<out ListenableWorker>, internal val intervalMillis: Long) :
         WorkRequest.Builder<Builder, PeriodicWorkRequest>(workerClass) {
@@ -129,6 +130,12 @@ class PeriodicWorkRequest internal constructor(b: Builder) : WorkRequest(
         ) : this(workerClass, repeatInterval, repeatIntervalTimeUnit)
         constructor(workerClass: Class<out ListenableWorker>, repeatInterval: Duration, flexInterval: Duration) :
             this(workerClass, repeatInterval)
+
+        internal var nextScheduleTimeOverride: Long = Long.MAX_VALUE
+
+        /** Runs the next period at [nextScheduleTimeOverrideMillis] (wall clock), once; later periods keep the interval. */
+        fun setNextScheduleTimeOverride(nextScheduleTimeOverrideMillis: Long) = apply { nextScheduleTimeOverride = nextScheduleTimeOverrideMillis }
+        fun clearNextScheduleTimeOverride() = apply { nextScheduleTimeOverride = Long.MAX_VALUE }
 
         override fun build() = PeriodicWorkRequest(this)
     }

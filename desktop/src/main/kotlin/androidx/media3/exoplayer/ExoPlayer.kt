@@ -14,10 +14,15 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.datasource.DataSpec
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioOutput
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.DesktopManifestMediaSource
+import androidx.media3.exoplayer.source.DesktopManifestProxy
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.ShuffleOrder
 import com.stash.desktop.media.FfTools
 import java.io.File
 import java.nio.ByteBuffer
@@ -25,9 +30,6 @@ import java.nio.ByteOrder
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
-import javax.sound.sampled.AudioFormat
-import javax.sound.sampled.AudioSystem
-import javax.sound.sampled.SourceDataLine
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
@@ -74,12 +76,16 @@ class DefaultLoadControl private constructor(
 open class DefaultRenderersFactory(val context: Context) {
     internal var cachedAudioSink: AudioSink? = null
 
+    /** Decoder choice is ffmpeg's on the desktop; kept so upstream's MediaCodec selection compiles and is honoured as a no-op. */
+    fun setMediaCodecSelector(mediaCodecSelector: androidx.media3.exoplayer.mediacodec.MediaCodecSelector): DefaultRenderersFactory = this
+
     open fun buildAudioSink(
         context: Context,
         enableFloatOutput: Boolean,
         enableAudioTrackPlaybackParams: Boolean,
     ): AudioSink? = DefaultAudioSink.Builder(context)
         .setEnableFloatOutput(enableFloatOutput)
+        .setEnableAudioOutputPlaybackParameters(enableAudioTrackPlaybackParams)
         .build()
 
     internal fun getOrCreateAudioSink(): AudioSink {
@@ -114,7 +120,7 @@ class PlayerMessage internal constructor(
     }
 }
 
-interface ExoPlayer : Player {
+interface ExoPlayer : Player, DesktopShuffleOrderAccessors {
     var pauseAtEndOfMediaItems: Boolean
 
     fun setMediaSource(mediaSource: MediaSource)
@@ -122,6 +128,9 @@ interface ExoPlayer : Player {
     fun setMediaSource(mediaSource: MediaSource, resetPosition: Boolean)
 
     fun createMessage(target: PlayerMessage.Target): PlayerMessage
+
+    fun addAnalyticsListener(listener: AnalyticsListener)
+    fun removeAnalyticsListener(listener: AnalyticsListener)
 
     class Builder(private val context: Context) {
         private var renderersFactory: DefaultRenderersFactory = DefaultRenderersFactory(context)
@@ -153,6 +162,9 @@ interface ExoPlayer : Player {
             this.handleAudioBecomingNoisy = handleAudioBecomingNoisy
         }
 
+        /** The application looper (the desktop player always reports to the main thread's listeners). */
+        fun setLooper(looper: android.os.Looper): Builder = this
+
         fun setWakeMode(wakeMode: Int): Builder = apply {
             this.wakeMode = wakeMode
         }
@@ -170,6 +182,10 @@ interface ExoPlayer : Player {
 
 private val nextAudioSessionId = AtomicInteger(100)
 
+/** ffmpeg decodes every source to this rate / channel count before the AudioOutput. */
+private const val OUTPUT_SAMPLE_RATE = 44_100L
+private const val OUTPUT_CHANNELS = 2
+
 internal class DesktopExoPlayer(
     private val context: Context,
     private val renderersFactory: DefaultRenderersFactory,
@@ -186,7 +202,7 @@ internal class DesktopExoPlayer(
 
     private val playlist = ArrayList<MediaItem>()
     private val customSources = HashMap<Int, MediaSource>()
-    private var shuffleOrder = IntArray(0)
+    private var shuffleIndices = IntArray(0)
     private var timeline: Timeline = DesktopPlaylistTimeline(0, IntArray(0))
 
     @Volatile
@@ -307,7 +323,7 @@ internal class DesktopExoPlayer(
 
     private fun rebuildTimeline(reason: Int) {
         val n = playlist.size
-        if (shuffleOrder.size != n) {
+        if (shuffleIndices.size != n) {
             val order = IntArray(n) { it }
             if (shuffleEnabledVal && n > 1) {
                 for (i in n - 1 downTo 1) {
@@ -317,9 +333,9 @@ internal class DesktopExoPlayer(
                     order[j] = tmp
                 }
             }
-            shuffleOrder = order
+            shuffleIndices = order
         }
-        timeline = DesktopPlaylistTimeline(n, shuffleOrder)
+        timeline = DesktopPlaylistTimeline(n, shuffleIndices)
         notifyListeners(Player.EVENT_TIMELINE_CHANGED) {
             it.onTimelineChanged(timeline, reason)
         }
@@ -339,7 +355,7 @@ internal class DesktopExoPlayer(
         currentIdx = 0
         currentPosMs.set(startPositionMs.coerceAtLeast(0L))
         currentDurMs.set(extractItemDurationMs(mediaSource.mediaItem))
-        shuffleOrder = intArrayOf(0)
+        shuffleIndices = intArrayOf(0)
         rebuildTimeline(Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
         notifyListeners(Player.EVENT_MEDIA_ITEM_TRANSITION) {
             it.onMediaItemTransition(mediaSource.mediaItem, Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED)
@@ -377,7 +393,7 @@ internal class DesktopExoPlayer(
         val newCurrent = getCurrentMediaItem()
         clearCachedStreamIfDifferent(newCurrent)
         currentDurMs.set(extractItemDurationMs(newCurrent))
-        shuffleOrder = IntArray(0)
+        shuffleIndices = IntArray(0)
         rebuildTimeline(Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
         if (newCurrent != prevItem) {
             notifyListeners(Player.EVENT_MEDIA_ITEM_TRANSITION) {
@@ -424,7 +440,7 @@ internal class DesktopExoPlayer(
             currentIdx += mediaItems.size
         }
         playlist.addAll(insertIndex, mediaItems)
-        shuffleOrder = IntArray(0)
+        shuffleIndices = IntArray(0)
         rebuildTimeline(Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
         if (wasEmpty) {
             currentIdx = 0
@@ -448,7 +464,7 @@ internal class DesktopExoPlayer(
             currentIndex < currentIdx && newIndex >= currentIdx -> currentIdx--
             currentIndex > currentIdx && newIndex <= currentIdx -> currentIdx++
         }
-        shuffleOrder = IntArray(0)
+        shuffleIndices = IntArray(0)
         rebuildTimeline(Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
     }
 
@@ -458,7 +474,7 @@ internal class DesktopExoPlayer(
         playlist.subList(fromIndex, toIndex).clear()
         val dest = newIndex.coerceIn(0, playlist.size)
         playlist.addAll(dest, sub)
-        shuffleOrder = IntArray(0)
+        shuffleIndices = IntArray(0)
         rebuildTimeline(Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
     }
 
@@ -480,7 +496,7 @@ internal class DesktopExoPlayer(
         if (fromIndex < 0 || toIndex > playlist.size || fromIndex > toIndex) return
         playlist.subList(fromIndex, toIndex).clear()
         playlist.addAll(fromIndex, mediaItems)
-        shuffleOrder = IntArray(0)
+        shuffleIndices = IntArray(0)
         rebuildTimeline(Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
     }
 
@@ -508,7 +524,7 @@ internal class DesktopExoPlayer(
                 startPlaybackForCurrentItem(0L)
             }
         }
-        shuffleOrder = IntArray(0)
+        shuffleIndices = IntArray(0)
         rebuildTimeline(Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
     }
 
@@ -520,7 +536,7 @@ internal class DesktopExoPlayer(
         currentIdx = 0
         currentPosMs.set(0L)
         currentDurMs.set(C.TIME_UNSET)
-        shuffleOrder = IntArray(0)
+        shuffleIndices = IntArray(0)
         rebuildTimeline(Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
     }
 
@@ -599,7 +615,7 @@ internal class DesktopExoPlayer(
     override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
         if (shuffleEnabledVal == shuffleModeEnabled) return
         shuffleEnabledVal = shuffleModeEnabled
-        shuffleOrder = IntArray(0)
+        shuffleIndices = IntArray(0)
         rebuildTimeline(Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
         notifyListeners(Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED) {
             it.onShuffleModeEnabledChanged(shuffleModeEnabled)
@@ -748,10 +764,8 @@ internal class DesktopExoPlayer(
         cancelActivePlayback()
         clearCachedStreamIfDifferent(null)
         abandonAudioFocusIfNeeded()
-        if (audioSink is DefaultAudioSink) {
-            audioSink.resetChain()
-        }
         listeners.clear()
+        analyticsListeners.clear()
         updatePlaybackState(Player.STATE_IDLE)
     }
 
@@ -870,6 +884,8 @@ internal class DesktopExoPlayer(
 
     override fun createMessage(target: PlayerMessage.Target): PlayerMessage = PlayerMessage(target)
 
+    override fun getShuffleOrder(): ShuffleOrder = ShuffleOrder.DefaultShuffleOrder(shuffleIndices.copyOf(), 0L)
+
     private fun requestAudioFocusIfNeeded() {
         val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         val req = audioFocusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
@@ -923,6 +939,110 @@ internal class DesktopExoPlayer(
         }
     }
 
+    // ── Audio output, analytics (media3 AudioOutputProvider / AnalyticsListener seams) ──
+
+    private val analyticsListeners = CopyOnWriteArrayList<AnalyticsListener>()
+
+    override fun addAnalyticsListener(listener: AnalyticsListener) {
+        analyticsListeners.addIfAbsent(listener)
+    }
+
+    override fun removeAnalyticsListener(listener: AnalyticsListener) {
+        analyticsListeners.remove(listener)
+    }
+
+    private fun eventTime(): AnalyticsListener.EventTime = AnalyticsListener.EventTime(
+        realtimeMs = android.os.SystemClock.elapsedRealtime(),
+        timeline = timeline,
+        windowIndex = currentIdx,
+        eventPlaybackPositionMs = currentPosMs.get(),
+    )
+
+    /** The output for the decoded stream, or null (headless / no audio device): playback then paces itself. */
+    private fun openOutput(sink: DefaultAudioSink?): AudioOutput? {
+        val s = sink ?: return null
+        return try {
+            s.openOutput(OUTPUT_SAMPLE_RATE.toInt(), OUTPUT_CHANNELS, audioAttrs, sessionId).also { out ->
+                out.setPlaybackParameters(playbackParams)
+                val name = "ffmpeg (${if (s.pcmEncoding == C.ENCODING_PCM_FLOAT) "f32le" else "s16le"})"
+                val now = android.os.SystemClock.elapsedRealtime()
+                javax.swing.SwingUtilities.invokeLater {
+                    analyticsListeners.forEach { it.onAudioDecoderInitialized(eventTime(), name, now, 0L) }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("DesktopExo", "No audio output: ${e.message}")
+            null
+        }
+    }
+
+    /** Tells analytics listeners what the source is (ffprobe of the file, when there is one) on the application thread. */
+    private fun reportSourceFormat(file: File?) {
+        if (analyticsListeners.isEmpty()) return
+        Thread({
+            val format = runCatching { file?.let(::probeFormat) }.getOrNull()
+                ?: androidx.media3.common.Format.Builder()
+                    .setSampleMimeType(androidx.media3.common.MimeTypes.AUDIO_RAW)
+                    .setSampleRate(OUTPUT_SAMPLE_RATE.toInt())
+                    .setChannelCount(OUTPUT_CHANNELS)
+                    .setPcmEncoding((audioSink as? DefaultAudioSink)?.pcmEncoding ?: C.ENCODING_PCM_16BIT)
+                    .build()
+            javax.swing.SwingUtilities.invokeLater {
+                analyticsListeners.forEach { it.onAudioInputFormatChanged(eventTime(), format, null) }
+            }
+        }, "StashExoProbe-$sessionId").apply { isDaemon = true; start() }
+    }
+
+    private fun probeFormat(file: File): androidx.media3.common.Format? {
+        val probe = FfTools.probe(file)
+        val stream = probe.streams.firstOrNull { probe.str(it, "codec_type") == "audio" } ?: return null
+        val codec = probe.str(stream, "codec_name").orEmpty()
+        val bits = probe.int(stream, "bits_per_raw_sample")?.takeIf { it > 0 } ?: probe.int(stream, "bits_per_sample")?.takeIf { it > 0 }
+        val mime = when (codec) {
+            "flac" -> androidx.media3.common.MimeTypes.AUDIO_FLAC
+            "alac" -> androidx.media3.common.MimeTypes.AUDIO_ALAC
+            "aac" -> androidx.media3.common.MimeTypes.AUDIO_AAC
+            "opus" -> androidx.media3.common.MimeTypes.AUDIO_OPUS
+            "mp3" -> androidx.media3.common.MimeTypes.AUDIO_MPEG
+            "vorbis" -> androidx.media3.common.MimeTypes.AUDIO_VORBIS
+            "ac3" -> androidx.media3.common.MimeTypes.AUDIO_AC3
+            "eac3" -> androidx.media3.common.MimeTypes.AUDIO_E_AC3
+            else -> if (codec.startsWith("pcm_")) androidx.media3.common.MimeTypes.AUDIO_RAW else "audio/$codec"
+        }
+        val pcm = when (bits) {
+            8 -> C.ENCODING_PCM_8BIT
+            16 -> C.ENCODING_PCM_16BIT
+            24 -> C.ENCODING_PCM_24BIT
+            32 -> if (probe.str(stream, "sample_fmt")?.startsWith("flt") == true) C.ENCODING_PCM_FLOAT else C.ENCODING_PCM_32BIT
+            else -> androidx.media3.common.Format.NO_VALUE
+        }
+        return androidx.media3.common.Format.Builder()
+            .setSampleMimeType(mime)
+            .setCodecs(codec)
+            .setSampleRate(probe.int(stream, "sample_rate") ?: androidx.media3.common.Format.NO_VALUE)
+            .setChannelCount(probe.int(stream, "channels") ?: androidx.media3.common.Format.NO_VALUE)
+            .setPcmEncoding(pcm)
+            .setAverageBitrate(probe.int(stream, "bit_rate") ?: probe.int(probe.format, "bit_rate") ?: androidx.media3.common.Format.NO_VALUE)
+            .build()
+    }
+
+    override fun setShuffleOrder(shuffleOrder: ShuffleOrder) {
+        val n = playlist.size
+        val order = IntArray(shuffleOrder.getLength()) { -1 }
+        var i = shuffleOrder.getFirstIndex()
+        var k = 0
+        while (i != C.INDEX_UNSET && k < order.size) {
+            order[k++] = i
+            i = shuffleOrder.getNextIndex(i)
+        }
+        if (k != n || order.sorted() != (0 until n).toList()) {
+            android.util.Log.w("DesktopExo", "setShuffleOrder ignored: not a permutation of $n items")
+            return
+        }
+        this.shuffleIndices = order
+        rebuildTimeline(Player.TIMELINE_CHANGE_REASON_PLAYLIST_CHANGED)
+    }
+
     private fun cancelActivePlayback() {
         playbackGeneration.incrementAndGet()
         runCatching { activeProcess?.destroyForcibly() }
@@ -960,10 +1080,11 @@ internal class DesktopExoPlayer(
         startPosMs: Long,
     ) {
         val dataSource = source.createDataSource()
-        var line: SourceDataLine? = null
+        var output: AudioOutput? = null
         var ffmpegProc: Process? = null
         var tempStreamFile: File? = null
         var keepTempStreamFile = false
+        var manifestSession: DesktopManifestProxy.Session? = null
         try {
             val uri = item.localConfiguration?.uri
             if (uri == null) {
@@ -978,8 +1099,14 @@ internal class DesktopExoPlayer(
                 itemKey != null && itemKey == cachedStreamKey && it.isFile && it.length() > 0L
             }
 
+            // HLS / DASH: ffmpeg demuxes, reading the manifest and its segments through this
+            // source's DataSource behind a loopback proxy (upstream's gates and refresh apply).
+            manifestSession = (source as? DesktopManifestMediaSource)?.let { m ->
+                DesktopManifestProxy.open(m.manifestUri, m.manifestDataSourceFactory)
+            }
+            val manifestInput: String? = manifestSession?.url
             var localFile: File? = reusableCachedFile
-            if (localFile == null) {
+            if (localFile == null && manifestInput == null) {
                 // Open the DataSource to trigger LazyResolvingDataSource / RefreshingDataSource / CacheDataSource.
                 val dataSpec = DataSpec.Builder().setUri(uri).build()
                 dataSource.open(dataSpec)
@@ -1012,7 +1139,7 @@ internal class DesktopExoPlayer(
             var streamDownloadComplete = false
             var streamDownloadError: Throwable? = null
 
-            if (localFile == null) {
+            if (localFile == null && manifestInput == null) {
                 val tmp = File.createTempFile("stash-stream-", ".media").apply { deleteOnExit() }
                 tempStreamFile = tmp
                 val downloader = Thread({
@@ -1111,29 +1238,20 @@ internal class DesktopExoPlayer(
                 }
             }
 
-            if (audioSink is DefaultAudioSink) {
-                audioSink.configureChain(
-                    androidx.media3.common.audio.AudioProcessor.AudioFormat(
-                        44_100,
-                        2,
-                        C.ENCODING_PCM_16BIT,
-                    ),
-                )
-            }
-
             currentPosMs.set(startPosMs.coerceAtLeast(0L))
             if (playbackGeneration.get() != gen) return
             updatePlaybackState(Player.STATE_READY)
             android.util.Log.i("DesktopExo", "Playback READY for mediaId=${item.mediaId} startPosMs=$startPosMs durMs=${currentDurMs.get()} localFile=${localFile != null}")
 
             val ffmpegBin = FfTools.resolve("ffmpeg")
-            val javaxFormat = AudioFormat(44_100f, 16, 2, true, false)
-            line = runCatching {
-                AudioSystem.getSourceDataLine(javaxFormat).apply {
-                    open(javaxFormat, 16_384)
-                    start()
-                }
-            }.getOrNull()
+            val sink = audioSink as? DefaultAudioSink
+            val encoding = sink?.pcmEncoding ?: C.ENCODING_PCM_16BIT
+            val float = encoding == C.ENCODING_PCM_FLOAT
+            val frameBytes = OUTPUT_CHANNELS * (if (float) 4 else 2)
+            output = openOutput(sink)
+            var outputPlaying = false
+            var outputVolume = -1f
+            reportSourceFormat(localFile)
 
             if (ffmpegBin != null) {
                 val resolvedLocalFile = localFile
@@ -1150,24 +1268,40 @@ internal class DesktopExoPlayer(
                     }
                     cmd.add("-i")
                     cmd.add("file:${resolvedLocalFile.absolutePath}")
+                } else if (manifestInput != null) {
+                    runCatching { dataSource.close() }
+                    if (startPosMs > 0L) {
+                        cmd.add("-ss")
+                        cmd.add(String.format(java.util.Locale.US, "%.3f", startPosMs / 1000.0))
+                    }
+                    cmd.add("-i")
+                    cmd.add(manifestInput)
                 } else {
                     cmd.add("-i")
                     cmd.add("pipe:0")
                 }
                 cmd.add("-vn")
                 cmd.add("-f")
-                cmd.add("s16le")
+                cmd.add(if (float) "f32le" else "s16le")
                 cmd.add("-acodec")
-                cmd.add("pcm_s16le")
+                cmd.add(if (float) "pcm_f32le" else "pcm_s16le")
                 cmd.add("-ac")
-                cmd.add("2")
+                cmd.add(OUTPUT_CHANNELS.toString())
                 cmd.add("-ar")
-                cmd.add("44100")
+                cmd.add(OUTPUT_SAMPLE_RATE.toString())
                 cmd.add("pipe:1")
 
-                val proc = ProcessBuilder(cmd)
-                    .redirectError(ProcessBuilder.Redirect.DISCARD)
-                    .start()
+                val proc = ProcessBuilder(cmd).start()
+                // Keep the tail of ffmpeg's stderr: it is the only account of a failed decode.
+                val ffmpegStderr = StringBuffer()
+                Thread({
+                    runCatching {
+                        proc.errorStream.bufferedReader().forEachLine { line ->
+                            ffmpegStderr.append(line).append('\n')
+                            if (ffmpegStderr.length > 4096) ffmpegStderr.delete(0, ffmpegStderr.length - 4096)
+                        }
+                    }
+                }, "ffmpeg-stderr").apply { isDaemon = true }.start()
                 ffmpegProc = proc
                 activeProcess = proc
 
@@ -1220,17 +1354,19 @@ internal class DesktopExoPlayer(
                     runCatching { proc.outputStream.close() }
                 }
 
-                val pcmBuf = ByteArray(4096)
-                var scaledBuf = ByteArray(4096)
+                val pcmBuf = ByteArray(1024 * frameBytes)
                 val input = proc.inputStream
-                var skipBytesRemaining = if (resolvedLocalFile == null && startPosMs > 0L) {
-                    // 44100 frames/sec * 4 bytes/frame
-                    ((startPosMs * 44_100L) / 1000L) * 4L
+                var skipBytesRemaining = if (resolvedLocalFile == null && manifestInput == null && startPosMs > 0L) {
+                    ((startPosMs * OUTPUT_SAMPLE_RATE) / 1000L) * frameBytes
                 } else {
                     0L
                 }
 
                 while (playbackGeneration.get() == gen && !Thread.currentThread().isInterrupted) {
+                    if (!playWhenReadyFlag && outputPlaying) {
+                        output?.pause()
+                        outputPlaying = false
+                    }
                     while (!playWhenReadyFlag && playbackGeneration.get() == gen) {
                         Thread.sleep(20L)
                     }
@@ -1240,52 +1376,62 @@ internal class DesktopExoPlayer(
                     if (n < 0) break
                     if (n == 0) continue
 
-                    // Align to 4-byte frame boundary (16-bit stereo)
-                    var validBytes = n - (n % 4)
+                    // Align to a whole PCM frame
+                    var validBytes = n - (n % frameBytes)
                     var readPos = n
-                    while (validBytes < n && playbackGeneration.get() == gen) {
-                        val extra = input.read(pcmBuf, readPos, n - validBytes)
+                    while (validBytes < readPos && playbackGeneration.get() == gen) {
+                        val extra = input.read(pcmBuf, readPos, frameBytes - (readPos % frameBytes))
                         if (extra <= 0) break
                         readPos += extra
-                        validBytes = readPos - (readPos % 4)
+                        validBytes = readPos - (readPos % frameBytes)
                     }
                     if (validBytes <= 0) continue
 
+                    var startOffset = 0
                     if (skipBytesRemaining > 0L) {
                         val skipped = validBytes.toLong().coerceAtMost(skipBytesRemaining)
                         skipBytesRemaining -= skipped
                         if (skipped >= validBytes) continue
+                        startOffset = skipped.toInt()
                     }
 
-                    val processed: ByteBuffer = if (audioSink is DefaultAudioSink) {
-                        audioSink.processPcm16(pcmBuf, validBytes)
-                    } else {
-                        ByteBuffer.wrap(pcmBuf, 0, validBytes).order(ByteOrder.LITTLE_ENDIAN)
-                    }
-
-                    val outBytes = processed.remaining()
-                    if (outBytes > 0) {
-                        if (scaledBuf.size < outBytes) {
-                            scaledBuf = ByteArray(outBytes)
-                        }
-                        processed.get(scaledBuf, 0, outBytes)
-
+                    val buffer = ByteBuffer.wrap(pcmBuf, 0, validBytes).order(ByteOrder.LITTLE_ENDIAN)
+                    buffer.position(startOffset)
+                    val framesThisChunk = buffer.remaining() / frameBytes
+                    if (output != null) {
                         val vol = volumeVal.coerceIn(0f, 1f)
-                        if (vol < 0.999f) {
-                            scalePcm16InPlace(scaledBuf, outBytes, vol)
+                        if (vol != outputVolume) {
+                            output?.setVolume(vol)
+                            outputVolume = vol
                         }
-
-                        if (line != null) {
-                            line.write(scaledBuf, 0, outBytes)
-                        } else {
-                            // Headless fallback pacing
-                            val frameCount = outBytes / 4
-                            val sleepMs = (frameCount * 1000L) / 44_100L
-                            if (sleepMs > 0L) Thread.sleep(sleepMs)
+                        if (!outputPlaying) {
+                            output?.play()
+                            outputPlaying = true
                         }
+                        val ptsUs = currentPosMs.get() * 1000L
+                        while (buffer.hasRemaining() && playbackGeneration.get() == gen) {
+                            val target = output ?: break
+                            try {
+                                target.write(buffer, 1, ptsUs)
+                            } catch (e: AudioOutput.WriteException) {
+                                if (!e.isRecoverable) throw e
+                                // media3 recreates the output on a recoverable error (upstream uses it to re-plan).
+                                runCatching { target.release() }
+                                output = openOutput(sink)?.also {
+                                    it.setVolume(vol)
+                                    it.play()
+                                }
+                                outputPlaying = output != null
+                            }
+                        }
+                    } else {
+                        // Headless fallback pacing
+                        val sleepMs = (framesThisChunk * 1000L) / OUTPUT_SAMPLE_RATE
+                        if (sleepMs > 0L) Thread.sleep(sleepMs)
+                    }
 
-                        val framesPlayed = outBytes / 4
-                        val deltaMs = (framesPlayed * 1000L) / 44_100L
+                    if (framesThisChunk > 0) {
+                        val deltaMs = (framesThisChunk * 1000L) / OUTPUT_SAMPLE_RATE
                         val newPos = currentPosMs.addAndGet(deltaMs)
                         val dur = currentDurMs.get()
                         if (dur > 0L && newPos > dur) {
@@ -1294,14 +1440,23 @@ internal class DesktopExoPlayer(
                     }
                 }
 
+                if (playbackGeneration.get() == gen && currentPosMs.get() == startPosMs &&
+                    proc.waitFor(2, java.util.concurrent.TimeUnit.SECONDS) && proc.exitValue() != 0
+                ) {
+                    // Nothing decoded: a failed decode, not the end of the track.
+                    throw manifestSession?.error
+                        ?: java.io.IOException("ffmpeg failed (exit ${proc.exitValue()}): ${ffmpegStderr.toString().trim().takeLast(500)}")
+                }
                 if (playbackGeneration.get() == gen) {
-                    val dlErr = synchronized(streamLock) { streamDownloadError }
+                    // A manifest load failure (Download mode, an expired URL upstream couldn't refresh) only
+                    // reaches ffmpeg as an HTTP status; surface the real cause like a media3 load error.
+                    val dlErr = synchronized(streamLock) { streamDownloadError } ?: manifestSession?.error
                     val dur = currentDurMs.get()
                     val pos = currentPosMs.get()
                     if (dlErr != null && (dur <= 0L || pos + 3_000L < dur)) {
                         throw dlErr
                     }
-                    runCatching { line?.drain() }
+                    runCatching { output?.stop() }
                     if (currentDurMs.get() <= 0L && pos > 0L) {
                         currentDurMs.set(pos)
                     }
@@ -1325,9 +1480,9 @@ internal class DesktopExoPlayer(
                 }
             }
         } finally {
+            manifestSession?.close()
             runCatching { ffmpegProc?.destroyForcibly() }
-            runCatching { line?.stop() }
-            runCatching { line?.close() }
+            runCatching { output?.release() }
             runCatching { dataSource.close() }
             if (!keepTempStreamFile && tempStreamFile != null && tempStreamFile != cachedStreamFile) {
                 runCatching { tempStreamFile.delete() }

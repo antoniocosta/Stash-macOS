@@ -23,6 +23,10 @@ object DesktopSystemServices {
         register(Context.ACTIVITY_SERVICE) { ActivityManager.INSTANCE }
         register(Context.CLIPBOARD_SERVICE) { ClipboardManager.INSTANCE }
         register(Context.AUDIO_SERVICE) { android.media.AudioManager.INSTANCE }
+        register(Context.POWER_SERVICE) { android.os.PowerManager() }
+        register(Context.WIFI_SERVICE) { android.net.wifi.WifiManager() }
+        register(Context.USAGE_STATS_SERVICE) { android.app.usage.UsageStatsManager() }
+        register(Context.ACCESSIBILITY_SERVICE) { android.view.accessibility.AccessibilityManager() }
     }
 
     fun register(name: String, factory: () -> Any) {

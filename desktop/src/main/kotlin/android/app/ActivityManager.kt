@@ -8,6 +8,9 @@ class ActivityManager private constructor() {
     fun getHistoricalProcessExitReasons(packageName: String?, pid: Int, maxNum: Int): MutableList<ApplicationExitInfo> =
         mutableListOf()
 
+    /** macOS never restricts a running app's background work. */
+    val isBackgroundRestricted: Boolean get() = false
+
     companion object {
         internal val INSTANCE = ActivityManager()
     }

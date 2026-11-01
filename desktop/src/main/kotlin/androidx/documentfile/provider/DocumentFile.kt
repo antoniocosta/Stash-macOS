@@ -25,6 +25,7 @@ abstract class DocumentFile internal constructor(val parentFile: DocumentFile?) 
     abstract fun canRead(): Boolean
     abstract fun canWrite(): Boolean
     abstract fun delete(): Boolean
+    abstract fun renameTo(displayName: String): Boolean
     abstract fun listFiles(): Array<DocumentFile>
     abstract fun createFile(mimeType: String, displayName: String): DocumentFile?
     abstract fun createDirectory(displayName: String): DocumentFile?
@@ -42,7 +43,7 @@ abstract class DocumentFile internal constructor(val parentFile: DocumentFile?) 
     }
 }
 
-private class FileDocumentFile(parent: DocumentFile?, private val file: File) : DocumentFile(parent) {
+private class FileDocumentFile(parent: DocumentFile?, private var file: File) : DocumentFile(parent) {
     override val uri: Uri get() = Uri.fromFile(file)
     override val name: String get() = file.name
     override val isDirectory: Boolean get() = file.isDirectory
@@ -53,6 +54,12 @@ private class FileDocumentFile(parent: DocumentFile?, private val file: File) : 
     override fun canRead() = file.canRead()
     override fun canWrite() = file.canWrite()
     override fun delete(): Boolean = if (file.isDirectory) file.deleteRecursively() else file.delete()
+    override fun renameTo(displayName: String): Boolean {
+        val target = File(file.parentFile, displayName)
+        if (!file.renameTo(target)) return false
+        file = target
+        return true
+    }
 
     override fun listFiles(): Array<DocumentFile> =
         file.listFiles().orEmpty().map<File, DocumentFile> { FileDocumentFile(this, it) }.toTypedArray()

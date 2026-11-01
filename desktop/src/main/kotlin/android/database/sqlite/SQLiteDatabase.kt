@@ -51,6 +51,31 @@ open class SQLiteDatabase(
 
     override fun execSQL(sql: String) = execSQL(sql, emptyArray())
 
+    /** A statement whose bindings are kept here and applied to a fresh prepare on each execution. */
+    override fun compileStatement(sql: String): androidx.sqlite.db.SupportSQLiteStatement = object : androidx.sqlite.db.SupportSQLiteStatement {
+        private val binds = sortedMapOf<Int, Any?>()
+        private fun args(): Array<Any?> = Array((binds.keys.maxOrNull() ?: 0)) { binds[it + 1] }
+        override fun bindNull(index: Int) { binds[index] = null }
+        override fun bindLong(index: Int, value: Long) { binds[index] = value }
+        override fun bindDouble(index: Int, value: Double) { binds[index] = value }
+        override fun bindString(index: Int, value: String) { binds[index] = value }
+        override fun bindBlob(index: Int, value: ByteArray) { binds[index] = value }
+        override fun clearBindings() = binds.clear()
+        override fun execute() = execSQL(sql, args())
+        override fun executeUpdateDelete(): Int {
+            execSQL(sql, args())
+            return query("SELECT changes()").use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        }
+        override fun executeInsert(): Long {
+            execSQL(sql, args())
+            val changed = query("SELECT changes()").use { if (it.moveToFirst()) it.getInt(0) else 0 }
+            return if (changed > 0) query("SELECT last_insert_rowid()").use { if (it.moveToFirst()) it.getLong(0) else -1L } else -1L
+        }
+        override fun simpleQueryForLong(): Long = query(sql, args()).use { if (it.moveToFirst()) it.getLong(0) else throw android.database.sqlite.SQLiteDoneException() }
+        override fun simpleQueryForString(): String? = query(sql, args()).use { if (it.moveToFirst()) it.getString(0) else throw android.database.sqlite.SQLiteDoneException() }
+        override fun close() = binds.clear()
+    }
+
     override fun execSQL(sql: String, bindArgs: Array<out Any?>) {
         executor.run(sql) { st ->
             bindArgs.forEachIndexed { i, v -> st.bindAny(i + 1, v) }

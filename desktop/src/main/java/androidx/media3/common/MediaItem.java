@@ -17,8 +17,9 @@
  * uses -- mediaId, localConfiguration (uri, mimeType, customCacheKey, tag, imageDurationMs),
  * mediaMetadata, requestMetadata -- with media3's exact builder / equals / hashCode semantics.
  * Omitted: ClippingConfiguration, LiveConfiguration, DrmConfiguration, AdsConfiguration,
- * stream keys, subtitle configurations and Bundle serialization (none exist in this port; an
- * item built here equals media3's item with those at their defaults).
+ * stream keys and subtitle configurations (none exist in this port; an item built here equals
+ * media3's item with those at their defaults). Bundle serialization only ever crosses this process
+ * (the desktop has no Binder), so toBundle* hands the item itself over by reference.
  */
 package androidx.media3.common;
 
@@ -456,6 +457,36 @@ public final class MediaItem {
   /** Returns a {@link Builder} initialized with the values of this instance. */
   public Builder buildUpon() {
     return new Builder(this);
+  }
+
+  private static final String FIELD_IN_PROCESS_REF = "desktop_media_item_ref";
+  private static final java.util.concurrent.atomic.AtomicLong nextRef = new java.util.concurrent.atomic.AtomicLong();
+  private static final java.util.Map<Long, MediaItem> inProcess = new java.util.concurrent.ConcurrentHashMap<>();
+
+  /** media3's Bundle form of this item, local configuration included (in-process on the desktop). */
+  @UnstableApi
+  public Bundle toBundleIncludeLocalConfiguration() {
+    long ref = nextRef.incrementAndGet();
+    inProcess.put(ref, this);
+    Bundle bundle = new Bundle();
+    bundle.putLong(FIELD_IN_PROCESS_REF, ref);
+    return bundle;
+  }
+
+  /** media3's Bundle form of this item, without its local configuration. */
+  @UnstableApi
+  public Bundle toBundle() {
+    return buildUpon().setUri((Uri) null).build().toBundleIncludeLocalConfiguration();
+  }
+
+  /** Restores a {@link MediaItem} from {@link #toBundle} / {@link #toBundleIncludeLocalConfiguration}. */
+  @UnstableApi
+  public static MediaItem fromBundle(Bundle bundle) {
+    MediaItem item = inProcess.remove(bundle.getLong(FIELD_IN_PROCESS_REF, -1L));
+    if (item == null) {
+      throw new IllegalArgumentException("Bundle holds no MediaItem");
+    }
+    return item;
   }
 
   @Override

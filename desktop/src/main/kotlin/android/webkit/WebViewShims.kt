@@ -31,6 +31,11 @@ class CookieManager private constructor() {
 
     fun flush() {}
 
+    fun setCookie(url: String, value: String, callback: ((Boolean) -> Unit)?) {
+        setCookie(url, value)
+        callback?.invoke(true)
+    }
+
     fun setCookie(url: String, value: String) {
         if (!acceptCookies) return
         val host = extractHost(url)
@@ -85,10 +90,15 @@ class WebSettings {
     var cacheMode: Int = LOAD_DEFAULT
     var mixedContentMode: Int = MIXED_CONTENT_NEVER_ALLOW
     var mediaPlaybackRequiresUserGesture: Boolean = true
+    var allowFileAccess: Boolean = false
+    var allowContentAccess: Boolean = false
+    var javaScriptCanOpenWindowsAutomatically: Boolean = false
     var userAgentString: String =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
     fun setSupportZoom(@Suppress("UNUSED_PARAMETER") support: Boolean) {}
+    fun setSupportMultipleWindows(support: Boolean) {}
+    fun setGeolocationEnabled(flag: Boolean) {}
 
     companion object {
         const val LOAD_DEFAULT = -1
@@ -112,11 +122,32 @@ internal class SimpleWebResourceRequest(
     override val url: Uri,
 ) : WebResourceRequest
 
-open class WebViewClient {
-    open fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {}
-    open fun onPageFinished(view: WebView?, url: String?) {}
-    open fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {}
-    open fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
+/** Desktop shim for android.webkit.WebResourceResponse. */
+class WebResourceResponse(
+    var mimeType: String?,
+    var encoding: String?,
+    var statusCode: Int,
+    var reasonPhrase: String?,
+    var responseHeaders: Map<String, String>?,
+    var data: java.io.InputStream?,
+) {
+    constructor(mimeType: String?, encoding: String?, data: java.io.InputStream?) : this(mimeType, encoding, 200, "OK", emptyMap(), data)
+}
+
+abstract class RenderProcessGoneDetail {
+    abstract fun didCrash(): Boolean
+    abstract fun rendererPriorityAtExit(): Int
+}
+
+/** Desktop shim for android.webkit.WebStorage: the desktop web window keeps no DOM storage of its own. */
+class WebStorage private constructor() {
+    fun deleteOrigin(origin: String) {}
+    fun deleteAllData() {}
+
+    companion object {
+        private val INSTANCE = WebStorage()
+        @JvmStatic fun getInstance(): WebStorage = INSTANCE
+    }
 }
 
 open class WebView(context: Context) : ViewGroup(context) {
@@ -175,6 +206,14 @@ open class WebView(context: Context) : ViewGroup(context) {
     }
 
     open fun destroy() {}
+
+    open fun onPause() {}
+
+    open fun onResume() {}
+
+    open fun loadDataWithBaseURL(baseUrl: String?, data: String, mimeType: String?, encoding: String?, historyUrl: String?) {
+        if (baseUrl != null) loadUrl(baseUrl)
+    }
 
     internal fun submitCookiesOrToken(input: String, targetUrl: String?) {
         val trimmed = input.trim()

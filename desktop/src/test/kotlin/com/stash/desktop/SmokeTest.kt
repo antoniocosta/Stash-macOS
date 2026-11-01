@@ -3,7 +3,8 @@ package com.stash.desktop
 import android.content.ComponentName
 import androidx.lifecycle.SavedStateHandle
 import androidx.media3.common.C
-import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.exoplayer.audio.AudioOutput
+import androidx.media3.exoplayer.audio.AudioOutputProvider
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -14,6 +15,16 @@ import com.stash.core.data.share.SharedMixFollowWorker
 import com.stash.core.data.share.SharedMixPublishWorker
 import com.stash.core.data.share.SharedMixUnshareWorker
 import com.stash.core.data.sync.workers.ArtBackfillWorker
+import com.stash.core.data.sync.workers.ArtistGenreWorker
+import com.stash.core.data.sync.workers.CanonicalRecomputeWorker
+import com.stash.core.data.sync.workers.DailySyncTriggerWorker
+import com.stash.core.data.weblink.mirror.MirrorSyncWorker
+import com.stash.data.cloud.scan.CloudScanWorker
+import com.stash.data.cloud.upload.CloudUploadWorker
+import com.stash.feature.record.imports.RecordImportWorker
+import com.stash.feature.record.lastfm.RecordLastfmWorker
+import com.stash.feature.record.lastfm.RecordLengthsWorker
+import com.stash.feature.record.taste.RecordTasteWorker
 import com.stash.core.data.sync.workers.ArtistImageBackfillWorker
 import com.stash.core.data.sync.workers.BlocklistIntegrityWorker
 import com.stash.core.data.sync.workers.DiffWorker
@@ -29,6 +40,8 @@ import com.stash.core.data.sync.workers.TagEnrichmentWorker
 import com.stash.core.data.sync.workers.TrackDownloadWorker
 import com.stash.core.data.sync.workers.TrackInfoEnrichmentWorker
 import com.stash.core.media.equalizer.StashRenderersFactory
+import com.stash.core.media.equalizer.dsp.FloatDspChain
+import com.stash.core.media.output.StashAudioOutputProvider
 import com.stash.core.media.service.StashPlaybackService
 import com.stash.data.download.backfill.MetadataBackfillWorker
 import com.stash.data.download.backfill.YtLibraryBackfillWorker
@@ -75,7 +88,7 @@ class SmokeTest {
     }
 
     @Test
-    fun `all 27 HiltViewModels instantiate via Dagger subcomponent`() {
+    fun `all 72 HiltViewModels instantiate via Dagger subcomponent`() {
         val runtime = StashDesktopRuntime.bootstrap(runOnCreate = false)
         val savedStateHandle = SavedStateHandle(
             mapOf(
@@ -86,12 +99,13 @@ class SmokeTest {
                 "artistId" to "UC_test",
                 "genre" to "All",
                 "shareId" to "test_share_id",
+                "postId" to "test_post_id",
                 "link" to "stash://track?t=Test&a=Artist",
             )
         )
         val probeComponent = runtime.component.viewModelComponentFactory().create(savedStateHandle)
         val vmClasses = probeComponent.viewModels.keys
-        assertEquals(27, vmClasses.size, "Expected all 27 @HiltViewModel bindings in map")
+        assertEquals(72, vmClasses.size, "Expected all 72 @HiltViewModel bindings in map")
 
         for (vmClass in vmClasses) {
             val instance = StashDesktopRuntime.runOnMainThread {
@@ -103,7 +117,7 @@ class SmokeTest {
     }
 
     @Test
-    fun `all 24 HiltWorkers instantiate via HiltWorkerFactory`() {
+    fun `all 34 HiltWorkers instantiate via HiltWorkerFactory`() {
         val runtime = StashDesktopRuntime.bootstrap(runOnCreate = false)
         val app = runtime.application
 
@@ -132,9 +146,19 @@ class SmokeTest {
             TrackInfoEnrichmentWorker::class.java,
             YtDlpUpdateWorker::class.java,
             YtLibraryBackfillWorker::class.java,
+            ArtistGenreWorker::class.java,
+            CanonicalRecomputeWorker::class.java,
+            CloudScanWorker::class.java,
+            CloudUploadWorker::class.java,
+            DailySyncTriggerWorker::class.java,
+            MirrorSyncWorker::class.java,
+            RecordImportWorker::class.java,
+            RecordLastfmWorker::class.java,
+            RecordLengthsWorker::class.java,
+            RecordTasteWorker::class.java,
         )
 
-        assertEquals(24, workerClasses.size)
+        assertEquals(34, workerClasses.size)
         for (workerClass in workerClasses) {
             val params = WorkerParameters(
                 id = UUID.randomUUID(),
@@ -151,7 +175,7 @@ class SmokeTest {
     }
 
     @Test
-    fun `5-stage 16-bit PCM DSP chain processes audio frames cleanly via StashRenderersFactory and DefaultAudioSink`() {
+    fun `float DSP chain processes audio through StashRenderersFactory's AudioOutputProvider`() {
         val runtime = StashDesktopRuntime.bootstrap(runOnCreate = false)
         val app = runtime.application
         val service = StashPlaybackService().also { runtime.component.inject(it) }
@@ -162,32 +186,80 @@ class SmokeTest {
         service.eqController.setBandGain(4, 1.5f)
         service.eqController.setBassBoostDb(4.0f)
 
-        val renderersFactory = StashRenderersFactory(app, service.eqController, service.loudnessController)
+        val renderersFactory = StashRenderersFactory(
+            app, service.eqController, service.loudnessController, service.hiResOutputController, true,
+        )
         val sink = renderersFactory.buildAudioSink(app, false, false) as DefaultAudioSink
-        assertEquals(5, sink.processors.size, "Expected 5-stage DSP AudioProcessor chain")
+        assertTrue(sink.enableFloatOutput, "StashRenderersFactory asks for float output (the DSP runs in float)")
 
-        val format = AudioProcessor.AudioFormat(44_100, 2, C.ENCODING_PCM_16BIT)
-        sink.configureChain(format)
+        // The same provider StashRenderersFactory installs, over a fake AudioTrack output that captures the PCM.
+        val captured = java.io.ByteArrayOutputStream()
+        val fakeOutput = java.lang.reflect.Proxy.newProxyInstance(
+            AudioOutput::class.java.classLoader, arrayOf(AudioOutput::class.java),
+        ) { _, method, args ->
+            when (method.name) {
+                "write" -> {
+                    val b = args[0] as ByteBuffer
+                    val bytes = ByteArray(b.remaining()).also { b.get(it) }
+                    captured.write(bytes)
+                    true
+                }
+                "getSampleRate" -> 44_100
+                "getPlaybackParameters" -> androidx.media3.common.PlaybackParameters.DEFAULT
+                "isOffloadedPlayback", "isStalled" -> false
+                "getAudioSessionId" -> 0
+                "getBufferSizeInFrames", "getPositionUs" -> 0L
+                "hashCode" -> 0
+                "equals" -> false
+                "toString" -> "fakeOutput"
+                else -> null
+            }
+        } as AudioOutput
+        val delegate = object : AudioOutputProvider {
+            override fun getAudioOutput(config: AudioOutputProvider.OutputConfig): AudioOutput = fakeOutput
+            override fun addListener(listener: AudioOutputProvider.Listener) {}
+            override fun removeListener(listener: AudioOutputProvider.Listener) {}
+            override fun release() {}
+        }
+        val provider = StashAudioOutputProvider(delegate, service.hiResOutputController, renderersFactory.outputSession) {
+            FloatDspChain({ service.eqController.state.value }) { service.loudnessController.state.value }
+        }
+        val output = provider.getAudioOutput(
+            AudioOutputProvider.OutputConfig.Builder()
+                .setEncoding(C.ENCODING_PCM_FLOAT)
+                .setSampleRate(44_100)
+                .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_STEREO)
+                .setBufferSize(44_100 * 8 / 4)
+                .setAudioAttributes(androidx.media3.common.AudioAttributes.DEFAULT)
+                .build(),
+        )
 
-        // Generate 1024 stereo frames (4096 bytes) of a 440Hz sine wave
+        // 1024 stereo frames of a 440 Hz sine wave, float PCM.
         val frameCount = 1024
-        val pcmBytes = ByteArray(frameCount * 4)
-        val buf = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
+        val input = ByteBuffer.allocate(frameCount * 8).order(ByteOrder.nativeOrder())
         for (i in 0 until frameCount) {
-            val sample = (sin(2.0 * PI * 440.0 * i / 44_100.0) * 12_000.0).toInt().toShort()
-            buf.putShort(sample) // L
-            buf.putShort(sample) // R
+            val sample = (sin(2.0 * PI * 440.0 * i / 44_100.0) * 0.35).toFloat()
+            input.putFloat(sample) // L
+            input.putFloat(sample) // R
         }
+        input.flip()
+        output.play()
+        while (input.hasRemaining()) assertTrue(output.write(input, 1, 0L), "output accepts the buffer")
 
-        val outBuffer = sink.processPcm16(pcmBytes, pcmBytes.size).order(ByteOrder.LITTLE_ENDIAN)
-        val remainingBytes = outBuffer.remaining()
-        assertEquals(pcmBytes.size, remainingBytes, "Expected frame-preserving PCM byte length")
-
-        var nonZeroSamples = 0
-        while (outBuffer.remaining() >= 2) {
-            if (outBuffer.short != 0.toShort()) nonZeroSamples++
+        val out = ByteBuffer.wrap(captured.toByteArray()).order(ByteOrder.nativeOrder())
+        assertTrue(out.remaining() > 0, "processed PCM reaches the AudioTrack output")
+        var nonZero = 0
+        var differs = 0
+        var i = 0
+        while (out.remaining() >= 4) {
+            val v = out.float
+            if (v != 0f) nonZero++
+            val expected = (sin(2.0 * PI * 440.0 * (i / 2) / 44_100.0) * 0.35).toFloat()
+            if (kotlin.math.abs(v - expected) > 1e-4f) differs++
+            i++
         }
-        assertTrue(nonZeroSamples > frameCount, "Expected non-zero processed PCM samples")
+        assertTrue(nonZero > frameCount, "Expected non-zero processed samples")
+        assertTrue(differs > 0, "Expected the EQ to change the signal")
     }
 
     @Test
@@ -353,7 +425,8 @@ class SmokeTest {
 
                 // 3. Sync tab
                 clickByText("Sync")
-                assertTrue("LAST SYNC" in collectTexts(), "Expected Sync screen content, got: ${collectTexts()}")
+                // No account connected yet: Sync shows its onboarding ("Bring your music in"), else the sync status.
+                assertTrue("LAST SYNC" in collectTexts() || "Bring your music in" in collectTexts(), "Expected Sync screen content, got: ${collectTexts()}")
 
                 // 4. Settings tab
                 clickByText("Settings")

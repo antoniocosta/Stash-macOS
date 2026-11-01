@@ -125,6 +125,10 @@ abstract class Uri internal constructor() : Parcelable, Comparable<Uri> {
 
         @JvmStatic fun parse(uriString: String): Uri = StringUri(uriString)
 
+        /** `scheme:ssp#fragment` with the ssp and fragment encoded, like AOSP's opaque URI. */
+        @JvmStatic fun fromParts(scheme: String, ssp: String, fragment: String?): Uri =
+            StringUri(scheme + ":" + encode(ssp) + (fragment?.let { "#" + encode(it) } ?: ""))
+
         /** `file://` + absolute path encoded with "/" allowed, exactly like AOSP. */
         @JvmStatic fun fromFile(file: File): Uri = StringUri("file://" + encode(file.absolutePath, "/"))
 

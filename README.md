@@ -18,7 +18,7 @@ If you like this or find it useful, support the project by buying me a coffee.
 
 This repository is a native **macOS (Apple Silicon)** desktop port of **[Stash](https://github.com/rawnaldclark/Stash)**, created and maintained by **[Rawnald Clark (`@rawnaldclark`)](https://github.com/rawnaldclark)** and **[`@ParaliyzedEvo`](https://github.com/ParaliyzedEvo)**.
 
-It is built as a **pure, zero-touch port**: all 18 upstream Android modules (`core/*`, `data/*`, `feature/*`, `app`) compile directly from their original source directories without modifying a single upstream code file. Every macOS platform shim, audio DSP pipeline bridge, and `.app` / `.dmg` packaging script lives strictly inside [`desktop/`](desktop/). See [`desktop/PORTING.md`](desktop/PORTING.md) for the technical architecture.
+It is built as a **pure, zero-touch port**: all 23 upstream Android modules (`core/*`, `data/*`, `feature/*`, `app`) compile directly from their original source directories without modifying a single upstream code file. Every macOS platform shim, audio DSP pipeline bridge, and `.app` / `.dmg` packaging script lives strictly inside [`desktop/`](desktop/). See [`desktop/PORTING.md`](desktop/PORTING.md) for the technical architecture.
 
 ---
 
@@ -57,7 +57,7 @@ Connect neither of them and Stash still works — playback and downloads fall ba
 
 ### Playback
 
-- **5-band parametric equalizer** with presets, preamp, bass shelf boost, and soft-clip limiter running in real time on 16-bit PCM audio
+- **5-band parametric equalizer** with presets, preamp, bass shelf boost, and soft-clip limiter running in real time on 32-bit float PCM audio
 - **Crossfader**
 - **Loudness normalizer**
 - **Word-synced & line-synced lyrics** — pulled from Apple Music (via Paxsenix), LRCLIB, and KuGou, scrolled in real time with the track

@@ -3,6 +3,7 @@ package com.stash.core.data.db
 import android.content.Context
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import com.stash.desktop.room.DesktopRoom
 
@@ -15,3 +16,8 @@ fun <T : RoomDatabase> Room.databaseBuilder(context: Context, klass: Class<T>, n
 
 val RoomDatabase.openHelper: SupportSQLiteOpenHelper
     get() = DesktopRoom.openHelper(this)
+
+/** Android Room's blocking `runInTransaction(Runnable)`, on the desktop's writer connection. */
+fun RoomDatabase.runInTransaction(body: Runnable) {
+    kotlinx.coroutines.runBlocking { withTransaction { body.run() } }
+}
